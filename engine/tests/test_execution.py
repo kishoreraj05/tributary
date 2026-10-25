@@ -105,3 +105,14 @@ def test_preview_renders_timestamps_in_session_time_zone(spark, tmp_path):
     result = preview(doc, "src", spark=spark)
     assert result.rows == [{"id": 1, "ts": "2026-10-01 10:00:00"}]
     assert result.schema["fields"][1]["type"] == "timestamp"  # the schema keeps the real type
+
+
+def test_preview_quality_block_shows_failing_rows_first(spark, tmp_path, orders_csv):
+    doc = pipeline(tmp_path, orders_csv, quality=quality("drop"))
+    result = preview(doc, "dq", spark=spark)
+    assert result.kind == "quality"
+    failing = [r for r in result.rows if r["_dq_failed_checks"]]
+    assert len(result.rows) == 5  # the action is not applied: every checked row is shown
+    assert result.rows[: len(failing)] == failing  # failing rows come first
+    assert sorted(c for r in failing for c in r["_dq_failed_checks"]) == ["expression_3", "not_null_1", "range_2"]
+    assert {q["check_id"] for q in result.quality} == {"not_null_1", "range_2", "expression_3"}

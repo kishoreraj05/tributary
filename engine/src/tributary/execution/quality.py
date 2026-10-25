@@ -26,13 +26,31 @@ class QualityOutcome:
     persisted: list[DataFrame] = field(default_factory=list)
 
 
-def run_quality(ctx: RunContext, step: Any, df: DataFrame) -> QualityOutcome:
-    q = step.node
+def _checks(ctx: RunContext, q: Any) -> tuple[list, list]:
+    """(row checks, dataset checks) as (index, check id, plugin, options) entries."""
     row_checks, dataset_checks = [], []
     for i, check in enumerate(q.checks):
         plugin = ctx.registry.create("check", check.type)
         entry = (i, check.id or f"{check.type}_{i + 1}", plugin, check)
         (row_checks if isinstance(plugin, RowCheck) else dataset_checks).append(entry)
+    return row_checks, dataset_checks
+
+
+def annotate_failures(ctx: RunContext, step: Any, df: DataFrame) -> DataFrame:
+    """The checked rows plus ``_dq_failed_checks`` (the row checks each row fails), failing
+    rows first. Used to preview a quality block without applying its action."""
+    row_checks, _ = _checks(ctx, step.node)
+    failed = F.array(
+        *[F.when(F.coalesce(plugin.failure_condition(opts), F.lit(False)), F.lit(cid)) for _, cid, plugin, opts in row_checks]
+    )
+    column = F.filter(failed, lambda x: x.isNotNull()) if row_checks else F.array().cast("array<string>")
+    annotated = df.withColumn("_dq_failed_checks", column)
+    return annotated.orderBy(F.size("_dq_failed_checks").desc())
+
+
+def run_quality(ctx: RunContext, step: Any, df: DataFrame) -> QualityOutcome:
+    q = step.node
+    row_checks, dataset_checks = _checks(ctx, q)
 
     flags = {_FLAG.format(i): F.coalesce(plugin.failure_condition(opts), F.lit(False)) for i, _, plugin, opts in row_checks}
     flagged = df.withColumns(flags) if flags else df

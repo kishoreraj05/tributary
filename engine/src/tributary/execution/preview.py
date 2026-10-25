@@ -11,6 +11,7 @@ from ..errors import TributaryError
 from ..planner import build_plan
 from ..spec import CompiledPipeline
 from .executor import PlanExecutor
+from .quality import annotate_failures
 from .util import read_sample, to_jsonable
 
 
@@ -40,7 +41,8 @@ def preview_node(
     """Runs only what ``node_id`` depends on, on bounded source reads, and returns its rows.
 
     Quality gates attached to the node run too, so the result shows their pass/fail counts.
-    Sinks are a dry run unless ``write_sinks`` is set (then the sample is really written).
+    For a quality block itself, the rows are the ones it checks, failing rows first, with a
+    ``_dq_failed_checks`` column. Sinks are a dry run unless ``write_sinks`` is set.
     """
     plan = build_plan(compiled)
     if node_id not in plan.steps:
@@ -64,6 +66,8 @@ def preview_node(
     with PlanExecutor(plan, ctx) as executor:
         result = executor.run(source_overrides=overrides, targets=targets, write_sinks=False)
         df = result.frames[node_id]
+        if step.kind == "quality":
+            df = annotate_failures(ctx, step, result.frames[step.inputs["input"]])
         rows = [to_jsonable(r.asDict(recursive=True)) for r in _for_display(df).limit(limit).collect()]
         target, written = None, False
         if step.kind == "sink":
