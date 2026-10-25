@@ -9,6 +9,7 @@ import type {
   QualityResult,
   Run,
   RunEvent,
+  Version,
   ValidateResult,
   VersionSummary,
 } from "./types";
@@ -73,6 +74,7 @@ export const api = {
   renamePipeline: (id: string, name: string) => put<Pipeline>(`/pipelines/${id}`, { name }),
   deletePipeline: (id: string) => del(`/pipelines/${id}`),
   versions: (id: string) => get<VersionSummary[]>(`/pipelines/${id}/versions`),
+  version: (id: string, version: number) => get<Version>(`/pipelines/${id}/versions/${version}`),
   createVersion: (id: string, message: string) => post<VersionSummary>(`/pipelines/${id}/versions`, { message }),
 
   validate: (body: SpecBody & { deep?: boolean }, signal?: AbortSignal) =>

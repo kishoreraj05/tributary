@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../api/client";
 import { useCatalog } from "../api/hooks";
-import type { Issue, VersionSummary } from "../api/types";
+import type { VersionSummary } from "../api/types";
 import { layoutOf, toSpec } from "../model/graph";
 import { problemCount, useEditor } from "../store/editor";
 import { Canvas } from "./Canvas";
@@ -11,6 +11,7 @@ import { Drawer } from "./Drawer";
 import { NodePanel } from "./panels/NodePanel";
 import { PipelinePanel } from "./panels/PipelinePanel";
 import { Palette } from "./Palette";
+import { draftStatus, loadLatestVersionSpec, saveVersion, VersionError, type DraftStatus } from "./versioning";
 
 export function EditorPage() {
   const { id = "" } = useParams();
@@ -19,7 +20,13 @@ export function EditorPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.pipeline(id).then(load).catch((e) => setLoadError(String(e.message ?? e)));
+    api
+      .pipeline(id)
+      .then((p) => {
+        load(p);
+        return loadLatestVersionSpec();
+      })
+      .catch((e) => setLoadError(String(e.message ?? e)));
   }, [id, load]);
   useAutosave();
   useLiveValidation();
@@ -56,8 +63,11 @@ export function EditorPage() {
 const SAVE_LABEL = { saved: "Saved", dirty: "Unsaved changes", saving: "Saving…", error: "Save failed" };
 
 function Toolbar() {
-  const { pipeline, env, setEnv, meta, saveState, checking, issues, analysis, set, setDrawer } = useEditor();
+  const state = useEditor();
+  const { pipeline, env, setEnv, meta, saveState, checking, issues, analysis, set, setDrawer, nodes, edges, versionSpec } = state;
   const problems = problemCount({ issues, analysis });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const status = useMemo(() => draftStatus(state), [pipeline, nodes, edges, meta, versionSpec]);
   const [dialog, setDialog] = useState<"version" | "run" | null>(null);
   const envs = Object.keys((meta.environments as object) ?? {});
   if (!pipeline) return null;
@@ -65,7 +75,7 @@ function Toolbar() {
     <div className="toolbar">
       <Link to="/" className="small">Pipelines</Link>
       <b>{pipeline.name}</b>
-      <span className="pill">v{pipeline.latest_version || "–"}</span>
+      <VersionPill status={status} version={pipeline.latest_version} onClick={() => setDialog("version")} />
       <span className={`small ${saveState === "error" ? "error-text" : "muted"}`}>{SAVE_LABEL[saveState]}</span>
       <span className="spacer" />
       <span className="small muted">
@@ -80,16 +90,40 @@ function Toolbar() {
       </label>
       <button onClick={() => setDrawer("plan")}>Plan</button>
       <button onClick={() => setDialog("version")}>Save version</button>
-      <button className="primary" disabled={!pipeline.latest_version} title={pipeline.latest_version ? "" : "Save a version first"} onClick={() => setDialog("run")}>
+      <button className="primary" onClick={() => setDialog("run")}>
         Run
       </button>
-      {dialog === "version" && <VersionDialog onClose={() => setDialog(null)} />}
+      {dialog === "version" && <VersionDialog status={status} onClose={() => setDialog(null)} />}
       {dialog === "run" && (
         <RunDialog
+          status={status}
           onClose={() => setDialog(null)}
           onStarted={(runId) => { set({ lastRunId: runId }); setDrawer("runs"); setDialog(null); }}
         />
       )}
+    </div>
+  );
+}
+
+function VersionPill({ status, version, onClick }: { status: DraftStatus; version: number; onClick(): void }) {
+  if (!version) {
+    return <button className="pill warn" style={{ border: "none" }} title="Runs need a saved version" onClick={onClick}>not versioned yet</button>;
+  }
+  if (!status.diff) return <span className="pill">v{version}</span>;
+  if (status.upToDate) return <span className="pill ok" title="The draft matches the latest version">v{version}</span>;
+  return (
+    <button className="pill warn" style={{ border: "none" }} title={`Not in v${version}:\n${status.lines.join("\n")}`} onClick={onClick}>
+      v{version} · draft has unsaved changes
+    </button>
+  );
+}
+
+function ChangeList({ status, version }: { status: DraftStatus; version: number }) {
+  if (!status.lines.length) return null;
+  return (
+    <div className="card small" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)", margin: "8px 0" }}>
+      <b>Changes not in v{version}</b>
+      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{status.lines.map((l) => <li key={l}>{l}</li>)}</ul>
     </div>
   );
 }
@@ -105,23 +139,18 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   );
 }
 
-function VersionDialog({ onClose }: { onClose(): void }) {
-  const { pipeline, nodes, edges, meta, set } = useEditor();
+function VersionDialog({ status, onClose }: { status: DraftStatus; onClose(): void }) {
+  const pipeline = useEditor((s) => s.pipeline);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const save = async () => {
-    if (!pipeline) return;
     setBusy(true);
     try {
-      await api.saveDraft(pipeline.id, toSpec(nodes, edges, meta), layoutOf(nodes));
-      const version = await api.createVersion(pipeline.id, message);
-      set({ pipeline: { ...pipeline, latest_version: version.version }, saveState: "saved", notice: `Saved version ${version.version}` });
+      await saveVersion(message);
       onClose();
     } catch (e) {
-      const detail = e instanceof ApiError ? (e.detail as { issues?: Issue[]; env?: string }) : null;
-      setErrors(detail?.issues?.map((i) => `${i.node_id ?? i.path}: ${i.message}`) ?? [String((e as Error).message)]);
-      if (detail?.issues) set({ issues: detail.issues });
+      setErrors(e instanceof VersionError ? e.lines : [String(e)]);
     } finally {
       setBusy(false);
     }
@@ -129,6 +158,8 @@ function VersionDialog({ onClose }: { onClose(): void }) {
   return (
     <Modal title="Save version" onClose={onClose}>
       <p className="muted small">Versions are validated for every environment and can't be changed afterwards. Runs use versions.</p>
+      {status.upToDate && <p className="small">The draft is identical to v{pipeline?.latest_version}; saving creates a copy.</p>}
+      <ChangeList status={status} version={pipeline?.latest_version ?? 0} />
       <div className="field">
         <label>Message</label>
         <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What changed?" />
@@ -143,44 +174,83 @@ function VersionDialog({ onClose }: { onClose(): void }) {
   );
 }
 
-function RunDialog({ onClose, onStarted }: { onClose(): void; onStarted(runId: string): void }) {
+function RunDialog({ status, onClose, onStarted }: { status: DraftStatus; onClose(): void; onStarted(runId: string): void }) {
   const { pipeline, env, meta } = useEditor();
+  const latest = pipeline?.latest_version ?? 0;
   const [versions, setVersions] = useState<VersionSummary[]>([]);
-  const [version, setVersion] = useState<number | undefined>(pipeline?.latest_version);
+  const [version, setVersion] = useState<number>(latest);
   const [runEnv, setRunEnv] = useState(env ?? "default");
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
   const envs = Object.keys((meta.environments as object) ?? {});
   useEffect(() => {
-    if (pipeline) api.versions(pipeline.id).then(setVersions);
-  }, [pipeline]);
-  const start = async () => {
+    if (pipeline && latest) api.versions(pipeline.id).then(setVersions);
+  }, [pipeline, latest]);
+
+  // The draft only matters when running the latest version (or when nothing is versioned).
+  const draftMissing = !latest || (version === latest && !status.upToDate && status.diff !== null);
+
+  const start = async (saveFirst: boolean) => {
+    setBusy(true);
+    setErrors([]);
     try {
-      const run = await api.startRun(pipeline!.id, runEnv, version);
+      const number = saveFirst ? await saveVersion(message || "saved before run") : version;
+      const run = await api.startRun(pipeline!.id, runEnv, number);
       onStarted(run.id);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      setErrors(e instanceof VersionError ? e.lines : [e instanceof ApiError ? e.message : String(e)]);
+    } finally {
+      setBusy(false);
     }
   };
+
   return (
     <Modal title="Run pipeline" onClose={onClose}>
-      <div className="field">
-        <label>Version</label>
-        <select value={version} onChange={(e) => setVersion(Number(e.target.value))}>
-          {[...versions].reverse().map((v) => <option key={v.version} value={v.version}>v{v.version}{v.message ? ` — ${v.message}` : ""}</option>)}
-        </select>
-      </div>
+      {latest > 0 && (
+        <div className="field">
+          <label>Version</label>
+          <select value={version} onChange={(e) => setVersion(Number(e.target.value))}>
+            {[...versions].reverse().map((v) => <option key={v.version} value={v.version}>v{v.version}{v.message ? ` — ${v.message}` : ""}</option>)}
+          </select>
+        </div>
+      )}
       <div className="field">
         <label>Environment</label>
         <select value={runEnv} onChange={(e) => setRunEnv(e.target.value)}>
           {(envs.length ? envs : ["default"]).map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
       </div>
-      <p className="muted small">The run uses the saved version, not unsaved canvas changes.</p>
-      {error && <div className="error-text small">{error}</div>}
+      {draftMissing ? (
+        <>
+          {latest ? (
+            <>
+              <p className="small" style={{ marginBottom: 0 }}>Runs use saved versions. These draft changes would <b>not</b> run with v{latest}:</p>
+              <ChangeList status={status} version={latest} />
+            </>
+          ) : (
+            <p className="small">Runs use saved versions and this pipeline has none yet. Save the draft as v1 to run it.</p>
+          )}
+          <div className="field">
+            <label>Version message</label>
+            <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What changed?" />
+          </div>
+        </>
+      ) : (
+        <p className="muted small">
+          {version === latest ? `The draft matches v${latest}.` : `Runs v${version} exactly as it was saved.`}
+        </p>
+      )}
+      {errors.map((e) => <div key={e} className="error-text small">{e}</div>)}
       <div className="row" style={{ marginTop: 12 }}>
         <span className="spacer" />
         <button onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={start}>Start run</button>
+        {draftMissing && latest > 0 && <button disabled={busy} onClick={() => start(false)}>Run v{latest} as saved</button>}
+        {draftMissing ? (
+          <button className="primary" disabled={busy} onClick={() => start(true)}>Save as v{latest + 1} &amp; run</button>
+        ) : (
+          <button className="primary" disabled={busy} onClick={() => start(false)}>Start run</button>
+        )}
       </div>
     </Modal>
   );

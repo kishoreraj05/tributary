@@ -44,6 +44,7 @@ interface EditorState {
   saveState: SaveState;
   notice: string | null;
   lastRunId: string | null;
+  versionSpec: Json | null; // spec of the latest version, to tell what the draft changes
 
   load(pipeline: Pipeline): void;
   onNodesChange(changes: NodeChange<FlowNode>[]): void;
@@ -82,6 +83,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   saveState: "saved",
   notice: null,
   lastRunId: null,
+  versionSpec: null,
 
   load(pipeline) {
     const { nodes, edges, meta } = fromSpec(pipeline.draft_spec ?? {}, pipeline.draft_layout ?? {});
@@ -100,6 +102,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       samples: {},
       saveState: "saved",
       lastRunId: null,
+      versionSpec: null,
     });
   },
 

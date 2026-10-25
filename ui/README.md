@@ -41,6 +41,8 @@ npm run build      # typecheck + production bundle
   - **Plan:** cache points, quality gates and the chosen Spark resources.
   - **Runs:** live status and logs over WebSocket, DQ results, cancel.
 - **Saving:** the draft autosaves after every change. *Save version* validates for every environment and freezes it; *Run* starts a saved version in a chosen environment.
+  - **Version status:** the toolbar pill is green when the draft matches the latest version. It turns amber ("draft has unsaved changes") and lists the nodes that differ when it doesn't. Layout moves and formatting-only differences don't count.
+  - **Run dialog:** when the draft has changes the latest version lacks, the dialog lists them and offers *Save as vN+1 & run* or *Run vN as saved*.
 - **Connections page:** settings per environment. Fields that look secret (password, token, …) are marked secret automatically, sent encrypted and never shown again.
 
 ## Code map

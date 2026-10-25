@@ -57,6 +57,11 @@ export interface VersionSummary {
   created_at: string;
 }
 
+export interface Version extends VersionSummary {
+  spec: Json;
+  ui_layout: Json;
+}
+
 export interface Issue {
   path: string;
   message: string;

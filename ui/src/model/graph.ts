@@ -253,3 +253,64 @@ export function connectionError(
   }
   return null;
 }
+
+/** JSON with sorted keys, so equal specs compare equal regardless of key order. */
+export function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Json).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export interface SpecDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+  settings: boolean; // pipeline meta, environments, runtime or execution differ
+}
+
+/** What the draft changes relative to a saved version, node by node. Both sides go
+ * through the canvas mapping first, so equivalent spellings (inputs: [a] vs
+ * [{node: a}], key order, empty values) are not reported as changes. */
+export function specDiff(current: Json, base: Json): SpecDiff {
+  const normalize = (spec: Json) => {
+    const { nodes, edges, meta } = fromSpec(spec);
+    return toSpec(nodes, edges, meta);
+  };
+  const a = normalize(current);
+  const b = normalize(base);
+  const diff: SpecDiff = { added: [], removed: [], changed: [], settings: false };
+  const byId = (spec: Json) => {
+    const out = new Map<string, string>();
+    for (const key of ["sources", "transforms", "quality", "sinks"]) {
+      for (const node of (spec[key] as Json[]) ?? []) out.set(String(node.id), stableStringify(node));
+    }
+    return out;
+  };
+  const now = byId(a);
+  const then = byId(b);
+  for (const [id, value] of now) {
+    if (!then.has(id)) diff.added.push(id);
+    else if (then.get(id) !== value) diff.changed.push(id);
+  }
+  for (const id of then.keys()) if (!now.has(id)) diff.removed.push(id);
+  diff.settings = ["version", "pipeline", "environments", "runtime", "execution"].some(
+    (k) => stableStringify(a[k]) !== stableStringify(b[k]),
+  );
+  return diff;
+}
+
+export function isSameSpec(diff: SpecDiff): boolean {
+  return !diff.added.length && !diff.removed.length && !diff.changed.length && !diff.settings;
+}
+
+export function describeDiff(diff: SpecDiff): string[] {
+  const lines = [];
+  if (diff.changed.length) lines.push(`changed: ${diff.changed.join(", ")}`);
+  if (diff.added.length) lines.push(`added: ${diff.added.join(", ")}`);
+  if (diff.removed.length) lines.push(`removed: ${diff.removed.join(", ")}`);
+  if (diff.settings) lines.push("pipeline settings or environments");
+  return lines;
+}

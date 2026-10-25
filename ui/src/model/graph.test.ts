@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionError, dataEdge, fromSpec, prune, tapEdge, toSpec, uniqueSpecId, type FlowNode } from "./graph";
+import {
+  connectionError,
+  dataEdge,
+  describeDiff,
+  fromSpec,
+  isSameSpec,
+  prune,
+  specDiff,
+  tapEdge,
+  toSpec,
+  uniqueSpecId,
+  type FlowNode,
+} from "./graph";
 
 const SPEC = {
   version: 1,
@@ -80,5 +92,31 @@ describe("drawing rules", () => {
     const fake = [{ data: { specId: "kafka_1" } }, { data: { specId: "kafka_2" } }] as FlowNode[];
     expect(uniqueSpecId("kafka", fake)).toBe("kafka_3");
     expect(uniqueSpecId("1st-node", [])).toBe("_1st_node_1");
+  });
+});
+
+describe("draft vs version diff", () => {
+  it("ignores spelling differences and key order", () => {
+    const spelled = { ...SPEC, transforms: [{ ...SPEC.transforms[0], inputs: [{ node: "orders_src", as: "orders" }, "customers_src"] }] };
+    const reordered = Object.fromEntries(Object.entries(SPEC).reverse());
+    expect(isSameSpec(specDiff(spelled, SPEC))).toBe(true);
+    expect(isSameSpec(specDiff(reordered, SPEC))).toBe(true);
+  });
+
+  it("reports changed, added and removed nodes and settings", () => {
+    const draft = JSON.parse(JSON.stringify(SPEC));
+    draft.sinks[0].options.path = "/somewhere/else";
+    draft.sinks.push({ id: "extra", type: "console", input: "orders_clean", options: {} });
+    draft.quality = draft.quality.filter((q: { id: string }) => q.id !== "guard");
+    draft.environments.dev.vars.out = "/tmp/other";
+    const diff = specDiff(draft, SPEC);
+    expect(diff).toEqual({ added: ["extra"], removed: ["guard"], changed: ["out"], settings: true });
+    expect(describeDiff(diff)).toEqual(["changed: out", "added: extra", "removed: guard", "pipeline settings or environments"]);
+  });
+
+  it("canvas layout is not part of the spec", () => {
+    const { nodes, edges, meta } = fromSpec(SPEC, { out: { x: 1, y: 1 } });
+    nodes.forEach((n) => (n.position = { x: n.position.x + 50, y: 0 }));
+    expect(isSameSpec(specDiff(toSpec(nodes, edges, meta), SPEC))).toBe(true);
   });
 });
