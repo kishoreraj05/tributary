@@ -1,0 +1,86 @@
+# Batch: two CSV sources -> SQL join -> quality gate (quarantine) -> Parquet + an aggregate.
+# Run from the repository root:
+#   tributary plan examples/csv_to_parquet.yaml
+#   tributary preview examples/csv_to_parquet.yaml --node orders_clean
+#   tributary run examples/csv_to_parquet.yaml
+version: 1
+pipeline:
+  id: orders_daily
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      out_dir: /tmp/tributary/orders_daily
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+  - id: customers_src
+    type: file
+    options:
+      path: "${env.data_dir}/customers.csv"
+      format: csv
+      read_options: { header: true, inferSchema: true }
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs:
+      - { node: orders_src, as: orders }
+      - { node: customers_src, as: customers }
+    options:
+      sql: |
+        SELECT o.order_id, o.amount, upper(o.country) AS country, c.segment, o.order_ts
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.customer_id
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean          # sinks below still read orders_clean; the gate is spliced in
+    action: quarantine
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+      - { type: expression, expr: "length(country) = 2" }
+      - { type: unique, columns: [order_id] }
+    results_sinks:
+      - { type: console }
+      - { type: file, options: { path: "${env.out_dir}/dq_results", format: json } }
+    quarantine_sink:
+      type: file
+      options: { path: "${env.out_dir}/orders_quarantine", format: parquet, mode: overwrite }
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_clean
+    options: { path: "${env.out_dir}/orders", format: parquet, mode: overwrite }
+  - id: revenue_out
+    type: file
+    input: revenue_by_country
+    options: { path: "${env.out_dir}/revenue", format: parquet, mode: overwrite }
+  - id: revenue_console
+    type: console
+    input: revenue_by_country
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

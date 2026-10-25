@@ -1,0 +1,36 @@
+# Local dev stack: Kafka (Redpanda, with a built-in Schema Registry), Postgres for DQ
+# results and a Prometheus Pushgateway. MinIO (S3) is behind the opt-in 's3' profile.
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+    ports: ["19092:19092", "18081:18081"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: tributary
+      POSTGRES_PASSWORD: tributary
+      POSTGRES_DB: tributary
+    ports: ["5432:5432"]
+
+  # Opt-in (docker compose --profile s3 up -d). MinIO no longer publishes this image on
+  # Docker Hub or quay.io; point it at an S3-compatible image you can pull.
+  minio:
+    profiles: ["s3"]
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: tributary
+      MINIO_ROOT_PASSWORD: tributary123
+    ports: ["9000:9000", "9001:9001"]
+
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    ports: ["9091:9091"]

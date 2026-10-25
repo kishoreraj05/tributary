@@ -1,0 +1,67 @@
+# Streaming from Kafka (start the stack first: docker compose -f deploy/docker-compose.yml up -d).
+# Produce test messages:  deploy/produce_orders.sh
+# Preview:  tributary preview examples/kafka_to_parquet.yaml -e dev --node orders_clean
+# Run:      TRIBUTARY_SECRET_DQ_DB_PASSWORD=tributary tributary run examples/kafka_to_parquet.yaml -e dev
+version: 1
+pipeline:
+  id: orders_stream
+  mode: streaming
+  streaming:
+    checkpoint_location: "${env.out_dir}/_checkpoint"
+    trigger: processing_time
+    interval: 10 seconds
+
+environments:
+  dev:
+    vars:
+      out_dir: /tmp/tributary/orders_stream
+    connections:
+      kafka_main: { type: kafka, brokers: "localhost:19092", schema_registry_url: "http://localhost:18081" }
+      dq_db:
+        type: postgres
+        url: "jdbc:postgresql://localhost:5432/tributary"
+        user: tributary
+        password: "${secret:dq_db/password}"
+  prod:
+    vars:
+      out_dir: s3a://my-bucket/orders_stream
+    connections:
+      kafka_main: { type: kafka, brokers: "${secret:kafka/prod/brokers}" }
+      dq_db: { type: postgres, url: "${secret:dq_db/prod/url}", user: dq, password: "${secret:dq_db/prod/password}" }
+
+sources:
+  - id: orders_src
+    type: kafka
+    connection: kafka_main
+    options: { topic: orders, starting_offsets: earliest, value_format: json, include_metadata: true }
+    schema: { kind: ddl, ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING" }
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, _kafka_timestamp AS event_ts
+        FROM orders
+
+quality:
+  - id: orders_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: postgres, connection: dq_db, options: { table: dq_results } }
+      - { type: prometheus, options: { url: "http://localhost:9091" } }
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_clean
+    options: { path: "${env.out_dir}/orders", format: parquet, mode: append }
+
+runtime:
+  dev: { master: "local[*]" }
+  prod: { resources: { profile: auto, max_executors: 20 } }

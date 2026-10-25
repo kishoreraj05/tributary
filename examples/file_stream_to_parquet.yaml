@@ -1,0 +1,43 @@
+# Streaming without a broker: new JSON files in a directory are processed as micro-batches.
+# trigger available_now processes what is there and stops, which makes it easy to try.
+version: 1
+pipeline:
+  id: orders_file_stream
+  mode: streaming
+  streaming:
+    checkpoint_location: /tmp/tributary/orders_file_stream/_checkpoint
+    trigger: available_now
+
+environments:
+  dev:
+    vars:
+      in_dir: examples/data/orders_stream
+      out_dir: /tmp/tributary/orders_file_stream
+
+sources:
+  - id: orders_src
+    type: file
+    options: { path: "${env.in_dir}", format: json }
+    schema: { kind: ddl, ddl: "order_id INT, amount DOUBLE, country STRING" }
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: SELECT order_id, amount, upper(country) AS country FROM orders
+
+quality:
+  - id: amount_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_clean
+    options: { path: "${env.out_dir}/orders", format: parquet, mode: append }

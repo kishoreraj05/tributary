@@ -1,0 +1,317 @@
+import { useMemo, useState } from "react";
+
+import { api } from "../../api/client";
+import { plugin, useCatalog, useConnections } from "../../api/hooks";
+import type { Catalog, Category, Json } from "../../api/types";
+import { SchemaForm } from "../../components/SchemaForm";
+import { isTap, type FlowNode } from "../../model/graph";
+import { nodeIssues, useEditor } from "../../store/editor";
+import { exactErrors, fieldErrors, nodePath } from "../issues";
+import { runPreview } from "../preview";
+import { SqlEditor } from "../SqlEditor";
+
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function NodePanel({ node }: { node: FlowNode }) {
+  const catalog = useCatalog();
+  const { nodes, issues, analysis, updateNode, removeNode, renameNode } = useEditor();
+  const [draftId, setDraftId] = useState(node.data.specId);
+  const [idError, setIdError] = useState<string | null>(null);
+  const messages = useMemo(() => nodeIssues({ issues, analysis }, node.data.specId), [issues, analysis, node.data.specId]);
+  if (!catalog) return null;
+  const path = nodePath(nodes, node);
+  const { kind, type } = node.data;
+
+  const commitId = () => {
+    if (draftId === node.data.specId) return setIdError(null);
+    if (!IDENT.test(draftId)) return setIdError("letters, digits and _ only; must not start with a digit");
+    if (nodes.some((n) => n.data.specId === draftId)) return setIdError("another node already uses this id");
+    setIdError(null);
+    renameNode(node.id, draftId);
+  };
+
+  return (
+    <div key={node.id}>
+      <div className="row">
+        <span className="pill" style={{ color: `var(--${kind})` }}>{kind}</span>
+        <span className="muted small">{kind === "quality" ? "data quality" : type}</span>
+        <span className="spacer" />
+        {kind !== "quality" && (
+          <button onClick={() => runPreview(node.data.specId)} title="Preview this node's output on sample data">
+            ▶ Test
+          </button>
+        )}
+        <button className="danger" onClick={() => removeNode(node.id)}>Delete</button>
+      </div>
+      <div className="field" style={{ marginTop: 12 }}>
+        <label>Id</label>
+        <input value={draftId} onChange={(e) => setDraftId(e.target.value)} onBlur={commitId} onKeyDown={(e) => e.key === "Enter" && commitId()} />
+        {idError && <div className="desc error-text">{idError}</div>}
+      </div>
+      {messages.length > 0 && (
+        <div className="card small" style={{ borderColor: "var(--danger)", marginBottom: 12 }}>
+          {messages.map((m) => <div key={m} className="error-text">{m}</div>)}
+        </div>
+      )}
+      {kind === "source" && <SourceFields node={node} catalog={catalog} path={path} />}
+      {kind === "transform" && <TransformFields node={node} catalog={catalog} path={path} />}
+      {kind === "sink" && <SinkFields node={node} catalog={catalog} path={path} />}
+      {kind === "quality" && <QualityFields node={node} catalog={catalog} path={path} />}
+      {kind !== "quality" && (
+        <PluginOptions node={node} catalog={catalog} errors={fieldErrors(issues, `${path}.options`)} onChange={(options) => updateNode(node.id, { options })} />
+      )}
+    </div>
+  );
+}
+
+function PluginOptions({ node, catalog, errors, onChange }: { node: FlowNode; catalog: Catalog; errors: Record<string, string[]>; onChange(o: Json): void }) {
+  const meta = plugin(catalog, node.data.kind as Category, node.data.type);
+  if (!meta) return <div className="error-text">Unknown {node.data.kind} type '{node.data.type}'</div>;
+  const exclude = node.data.type === "sql" ? ["sql"] : [];
+  return (
+    <>
+      <h3>Options</h3>
+      <SchemaForm schema={meta.options_schema} value={node.data.options} onChange={onChange} errors={errors} exclude={exclude} />
+    </>
+  );
+}
+
+function ConnectionField({ node, path }: { node: FlowNode; path: string }) {
+  const connections = useConnections();
+  const issues = useEditor((s) => s.issues);
+  const updateNode = useEditor((s) => s.updateNode);
+  const current = (node.data.extra.connection as string) ?? "";
+  const matching = connections.filter((c) => c.type === node.data.type || c.name === current);
+  return (
+    <div className="field">
+      <label>Connection</label>
+      <select value={current} onChange={(e) => updateNode(node.id, { extra: { ...node.data.extra, connection: e.target.value || undefined } })}>
+        <option value="">none (options below only)</option>
+        {matching.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+      </select>
+      <div className="desc">Settings per environment come from the connection; options below override them.</div>
+      {exactErrors(issues, `${path}.connection`).map((e) => <div key={e} className="desc error-text">{e}</div>)}
+    </div>
+  );
+}
+
+function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalog; path: string }) {
+  const { updateNode, issues, samples, set, meta } = useEditor();
+  const extra = node.data.extra;
+  const schema = (extra.schema as Json) ?? undefined;
+  const kindMeta = schema ? plugin(catalog, "schema", String(schema.kind)) : undefined;
+  const sample = samples[node.data.specId];
+  const setExtra = (patch: Json) => updateNode(node.id, { extra: { ...extra, ...patch } });
+
+  const upload = async (file: File) => {
+    const result = await api.uploadSample(file);
+    set({ samples: { ...useEditor.getState().samples, [node.data.specId]: result } });
+  };
+
+  return (
+    <>
+      <ConnectionField node={node} path={path} />
+      {meta.pipeline.mode === "streaming" && (
+        <label className="row field" style={{ color: "var(--text)" }}>
+          <input type="checkbox" checked={Boolean(extra.stream)} onChange={(e) => setExtra({ stream: e.target.checked || undefined })} />
+          This is the streaming source
+        </label>
+      )}
+      <h3>Schema</h3>
+      <div className="field">
+        <select value={schema ? String(schema.kind) : ""} onChange={(e) => setExtra({ schema: e.target.value ? { kind: e.target.value } : undefined })}>
+          <option value="">none</option>
+          {catalog.components.schema.map((s) => <option key={s.type} value={s.type}>{s.display_name} — {s.description}</option>)}
+        </select>
+      </div>
+      {schema && kindMeta && (
+        <SchemaForm
+          schema={kindMeta.options_schema}
+          value={schema}
+          exclude={["kind"]}
+          errors={fieldErrors(issues, `${path}.schema`)}
+          onChange={(v) => setExtra({ schema: { ...v, kind: schema.kind } })}
+        />
+      )}
+      <h3>Sample data</h3>
+      <div className="field">
+        <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        <div className="desc">
+          {sample ? (
+            <>
+              Previews use <b>{sample.filename}</b> instead of reading the source.{" "}
+              <button className="link small" onClick={() => { const next = { ...samples }; delete next[node.data.specId]; set({ samples: next }); }}>
+                Stop using it
+              </button>
+            </>
+          ) : (
+            "Optional: upload a CSV/JSON/Parquet file to preview without the real source."
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function TransformFields({ node, path }: { node: FlowNode; catalog: Catalog; path: string }) {
+  const { nodes, edges, analysis, issues, setAlias, updateNode } = useEditor();
+  const inputs = edges.filter((e) => e.target === node.id && !isTap(e));
+  const tables: Record<string, string[]> = {};
+  for (const edge of inputs) {
+    const upstream = nodes.find((n) => n.id === edge.source);
+    if (!upstream) continue;
+    const name = edge.data?.alias || upstream.data.specId;
+    tables[name] = (analysis[upstream.data.specId]?.schema?.fields ?? []).map((f) => f.name);
+  }
+  return (
+    <>
+      <h3>Inputs</h3>
+      {inputs.length === 0 && <div className="muted small field">Connect a source or transform to this node's left handle.</div>}
+      <div className="chips">
+        {inputs.map((edge) => {
+          const upstream = nodes.find((n) => n.id === edge.source)!;
+          const cols = analysis[upstream.data.specId]?.schema?.fields;
+          return (
+            <div className="chip" key={edge.id} title={`Table name for ${upstream.data.specId} in SQL`}>
+              <input value={edge.data?.alias ?? ""} placeholder={upstream.data.specId} onChange={(e) => setAlias(edge.id, e.target.value)} />
+              <span className="muted"> ← {upstream.data.specId}</span>
+              <div className="cols">{cols ? cols.map((f) => f.name).join(", ") : "columns appear after the check"}</div>
+            </div>
+          );
+        })}
+      </div>
+      {node.data.type === "sql" && (
+        <>
+          <h3>SQL</h3>
+          <SqlEditor
+            value={String(node.data.options.sql ?? "")}
+            tables={tables}
+            problems={issues.filter((i) => i.path.startsWith(path)).map((i) => i.message).concat(analysis[node.data.specId]?.error ?? [])}
+            onChange={(sql) => updateNode(node.id, { options: { ...node.data.options, sql: sql || undefined } })}
+          />
+          <div className="desc small" style={{ marginTop: 4 }}>
+            Refer to inputs by the names above. {Object.keys(tables).length > 0 && `Try: SELECT * FROM ${Object.keys(tables)[0]}`}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function SinkFields({ node, path }: { node: FlowNode; catalog: Catalog; path: string }) {
+  return <ConnectionField node={node} path={path} />;
+}
+
+function TargetPicker({ label, category, value, onChange, catalog, errors }: {
+  label: string; category: Category; value: Json | undefined; onChange(v: Json | undefined): void; catalog: Catalog; errors: Record<string, string[]>;
+}) {
+  const connections = useConnections();
+  const meta = value ? plugin(catalog, category, String(value.type)) : undefined;
+  return (
+    <div className="subform">
+      <div className="row field">
+        <select value={value ? String(value.type) : ""} onChange={(e) => onChange(e.target.value ? { type: e.target.value } : undefined)}>
+          <option value="">{label}…</option>
+          {catalog.components[category].map((p) => <option key={p.type} value={p.type}>{p.display_name}</option>)}
+        </select>
+        {value && (
+          <select value={String(value.connection ?? "")} onChange={(e) => onChange({ ...value, connection: e.target.value || undefined })}>
+            <option value="">no connection</option>
+            {connections.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+        )}
+      </div>
+      {value && meta && (
+        <SchemaForm schema={meta.options_schema} value={(value.options as Json) ?? {}} errors={errors} onChange={(options) => onChange({ ...value, options })} />
+      )}
+    </div>
+  );
+}
+
+function QualityFields({ node, catalog, path }: { node: FlowNode; catalog: Catalog; path: string }) {
+  const { nodes, edges, issues, updateNode } = useEditor();
+  const extra = node.data.extra;
+  const checks = (extra.checks as Json[]) ?? [];
+  const results = (extra.results_sinks as Json[]) ?? [];
+  const setExtra = (patch: Json) => updateNode(node.id, { extra: { ...extra, ...patch } });
+  const tap = edges.find((e) => e.source === node.id && isTap(e));
+  const target = tap ? nodes.find((n) => n.id === tap.target) : undefined;
+
+  return (
+    <>
+      <div className="field small">
+        {target ? (
+          <>
+            {target.data.kind === "sink" ? "Checks data going into sink " : "Checks the output of "}
+            <b>{target.data.specId}</b>
+          </>
+        ) : (
+          <span className="error-text">Not attached: drag from this block's bottom handle to the amber handle on top of a node.</span>
+        )}
+      </div>
+      <div className="field">
+        <label>When checks fail</label>
+        <select value={String(extra.action ?? "observe")} onChange={(e) => setExtra({ action: e.target.value })}>
+          <option value="observe">observe — record results only</option>
+          <option value="fail">fail — stop before any sink writes</option>
+          <option value="drop">drop — remove failing rows</option>
+          <option value="quarantine">quarantine — divert failing rows to a sink</option>
+        </select>
+      </div>
+      <h3>Checks</h3>
+      {checks.map((check, i) => {
+        const meta = plugin(catalog, "check", String(check.type));
+        return (
+          <div className="subform" key={i}>
+            <div className="row field">
+              <select value={String(check.type)} onChange={(e) => setExtra({ checks: checks.map((c, j) => (j === i ? { type: e.target.value } : c)) })}>
+                {catalog.components.check.map((p) => <option key={p.type} value={p.type}>{p.type}</option>)}
+              </select>
+              <button className="link small danger" onClick={() => setExtra({ checks: checks.filter((_, j) => j !== i) })}>Remove</button>
+            </div>
+            {meta && (
+              <SchemaForm
+                schema={meta.options_schema}
+                value={check}
+                exclude={["type"]}
+                errors={fieldErrors(issues, `${path}.checks[${i}]`)}
+                onChange={(v) => setExtra({ checks: checks.map((c, j) => (j === i ? { ...v, type: check.type } : c)) })}
+              />
+            )}
+          </div>
+        );
+      })}
+      <button onClick={() => setExtra({ checks: [...checks, { type: "not_null" }] })}>+ Add check</button>
+
+      <h3>Results go to</h3>
+      {results.map((t, i) => (
+        <TargetPicker
+          key={i}
+          label="metrics sink"
+          category="metrics_sink"
+          value={t}
+          catalog={catalog}
+          errors={fieldErrors(issues, `${path}.results_sinks[${i}].options`)}
+          onChange={(v) => setExtra({ results_sinks: v ? results.map((x, j) => (j === i ? v : x)) : results.filter((_, j) => j !== i) })}
+        />
+      ))}
+      <button onClick={() => setExtra({ results_sinks: [...results, { type: "console" }] })}>+ Add results sink</button>
+      <div className="desc small" style={{ marginTop: 4 }}>Runs started from here always keep results in the run history too.</div>
+
+      {extra.action === "quarantine" && (
+        <>
+          <h3>Quarantine sink</h3>
+          <TargetPicker
+            label="sink"
+            category="sink"
+            value={extra.quarantine_sink as Json | undefined}
+            catalog={catalog}
+            errors={fieldErrors(issues, `${path}.quarantine_sink.options`)}
+            onChange={(v) => setExtra({ quarantine_sink: v })}
+          />
+        </>
+      )}
+    </>
+  );
+}
+

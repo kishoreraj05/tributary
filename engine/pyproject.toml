@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tributary-engine"
+version = "0.1.0"
+description = "Config-driven, plugin-based PySpark engine for batch and streaming data pipelines"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "pyspark>=3.5,<4",  # 4.x (Java 17+) not tested yet
+  "pydantic>=2.6,<3",
+  "pyyaml>=6",
+  "sqlglot>=25",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+tributary = "tributary.cli:app"
+
+# ---------------------------------------------------------------------------
+# Built-in plugins. Third-party packages register theirs the same way, under
+# the same entry-point groups, without touching this project.
+# ---------------------------------------------------------------------------
+[project.entry-points."tributary.sources"]
+file = "tributary.plugins.sources.file:FileSource"
+kafka = "tributary.plugins.sources.kafka:KafkaSource"
+
+[project.entry-points."tributary.transforms"]
+sql = "tributary.plugins.transforms.sql:SqlTransform"
+
+[project.entry-points."tributary.sinks"]
+file = "tributary.plugins.sinks.file:FileSink"
+console = "tributary.plugins.sinks.console:ConsoleSink"
+
+[project.entry-points."tributary.checks"]
+not_null = "tributary.plugins.checks.row:NotNullCheck"
+range = "tributary.plugins.checks.row:RangeCheck"
+regex = "tributary.plugins.checks.row:RegexCheck"
+accepted_values = "tributary.plugins.checks.row:AcceptedValuesCheck"
+expression = "tributary.plugins.checks.row:ExpressionCheck"
+unique = "tributary.plugins.checks.dataset:UniqueCheck"
+row_count = "tributary.plugins.checks.dataset:RowCountCheck"
+
+[project.entry-points."tributary.metrics_sinks"]
+console = "tributary.plugins.metrics_sinks.console:ConsoleMetricsSink"
+file = "tributary.plugins.metrics_sinks.file:FileMetricsSink"
+jdbc = "tributary.plugins.metrics_sinks.jdbc:JdbcMetricsSink"
+postgres = "tributary.plugins.metrics_sinks.jdbc:PostgresMetricsSink"
+prometheus = "tributary.plugins.metrics_sinks.prometheus:PrometheusMetricsSink"
+
+[project.entry-points."tributary.schemas"]
+ddl = "tributary.plugins.schemas.basic:DdlSchema"
+static = "tributary.plugins.schemas.basic:StaticSchema"
+infer = "tributary.plugins.schemas.basic:InferSchema"
+registry = "tributary.plugins.schemas.registry:SchemaRegistrySchema"
+
+[project.entry-points."tributary.secret_providers"]
+env = "tributary.plugins.secrets.env:EnvSecretProvider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
