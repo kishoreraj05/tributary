@@ -1,7 +1,9 @@
+import { KeyRound, Lock, Plug, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../api/client";
 import { useCatalog } from "../api/hooks";
+import { connectionIcon, IconChip } from "../components/icons";
 import type { Connection } from "../api/types";
 
 const MASK = "********";
@@ -76,16 +78,22 @@ export function ConnectionsPage() {
 
   return (
     <div className="page">
-      <div className="row" style={{ marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>Connections</h1>
+      <div className="page-header">
+        <div>
+          <h1>Connections</h1>
+          <p>Settings per environment that nodes use by name. Secret fields are encrypted and never shown again.</p>
+        </div>
         <span className="spacer" />
-        <button className="primary" onClick={() => setDraft(empty())}>New connection</button>
+        <button className="primary" onClick={() => setDraft(empty())}><Plus size={15} />New connection</button>
       </div>
-      <p className="muted small">
-        Settings per environment that nodes reference by name. Secret fields are encrypted at rest and never shown again.
-      </p>
       {draft && (
-        <div className="card stack" style={{ marginBottom: 16 }}>
+        <div className="card stack" style={{ marginBottom: 20 }}>
+          <div className="row">
+            <IconChip icon={connectionIcon(draft.type)} color="var(--accent)" />
+            <b>{draft.existing ? `Edit ${draft.name}` : "New connection"}</b>
+            <span className="spacer" />
+            <button className="ghost icon sm" onClick={() => { setDraft(null); setError(null); }} aria-label="Close"><X size={15} /></button>
+          </div>
           <div className="row wrap">
             <div style={{ flex: 1, minWidth: 160 }}>
               <label>Name</label>
@@ -103,7 +111,7 @@ export function ConnectionsPage() {
           </div>
           {Object.entries(draft.envs).map(([env, rows]) => (
             <div key={env} className="subform">
-              <div className="row"><b>{env}</b><span className="spacer" />
+              <div className="row" style={{ marginBottom: 6 }}><span className="pill info">{env}</span><span className="spacer" />
                 <button className="link small danger" onClick={() => { const next = { ...draft.envs }; delete next[env]; setDraft({ ...draft, envs: next }); }}>Remove env</button>
               </div>
               {rows.map((row, i) => (
@@ -113,14 +121,14 @@ export function ConnectionsPage() {
                     setRows(env, rows.map((r, j) => (j === i ? { ...r, field, secret: r.secret || SECRET_HINTS.some((h) => field.toLowerCase().includes(h)) } : r)));
                   }} />
                   <input type={row.secret ? "password" : "text"} value={row.value} placeholder="value" onChange={(e) => setRows(env, rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))} />
-                  <label className="row small" style={{ margin: 0, whiteSpace: "nowrap" }}>
+                  <label className="check small" style={{ whiteSpace: "nowrap", fontSize: 12 }} title="Encrypt and hide this value">
                     <input type="checkbox" checked={row.secret} onChange={(e) => setRows(env, rows.map((r, j) => (j === i ? { ...r, secret: e.target.checked } : r)))} />
-                    secret
+                    <Lock size={12} />secret
                   </label>
-                  <button onClick={() => setRows(env, rows.filter((_, j) => j !== i))}>×</button>
+                  <button className="ghost icon" aria-label="Remove field" onClick={() => setRows(env, rows.filter((_, j) => j !== i))}>×</button>
                 </div>
               ))}
-              <button className="small" style={{ marginTop: 6 }} onClick={() => setRows(env, [...rows, { field: "", value: "", secret: false }])}>+ Field</button>
+              <button className="sm" style={{ margin: "6px 0 10px" }} onClick={() => setRows(env, [...rows, { field: "", value: "", secret: false }])}><Plus size={12} />Field</button>
               {rows.some((r) => r.secret && r.value === MASK) && <div className="desc small">Masked values keep the stored secret.</div>}
             </div>
           ))}
@@ -128,7 +136,7 @@ export function ConnectionsPage() {
             <button onClick={() => {
               const env = prompt("Environment name (e.g. prod)");
               if (env && !(env in draft.envs)) setDraft({ ...draft, envs: { ...draft.envs, [env]: [] } });
-            }}>+ Environment</button>
+            }}><Plus size={14} />Environment</button>
             <span className="spacer" />
             {error && <span className="error-text small">{error}</span>}
             <button onClick={() => { setDraft(null); setError(null); }}>Cancel</button>
@@ -137,27 +145,40 @@ export function ConnectionsPage() {
         </div>
       )}
       {connections.length === 0 ? (
-        <div className="muted">No connections yet.</div>
+        !draft && (
+          <div className="empty">
+            <IconChip icon={Plug} color="var(--accent)" size={20} large />
+            <h2>No connections yet</h2>
+            <p>Store brokers, databases and buckets once per environment, then pick them on any source or sink.</p>
+            <button className="primary" style={{ marginTop: 6 }} onClick={() => setDraft(empty())}><Plus size={15} />New connection</button>
+          </div>
+        )
       ) : (
-        <div className="card" style={{ padding: 0, overflow: "auto" }}>
-          <table className="grid list">
-            <thead><tr><th>Name</th><th>Type</th><th>Environments</th><th /></tr></thead>
-            <tbody>
-              {connections.map((c) => (
-                <tr key={c.name} onClick={() => setDraft(toDraft(c))}>
-                  <td><b>{c.name}</b>{c.description && <div className="muted small">{c.description}</div>}</td>
-                  <td>{c.type}</td>
-                  <td>{Object.keys(c.environments).map((e) => <span key={e} className="pill" style={{ marginRight: 4 }}>{e}</span>)}</td>
-                  <td>
-                    <button className="link small danger" onClick={async (e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete connection "${c.name}"?`)) { await api.deleteConnection(c.name); reload(); }
-                    }}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="card-grid">
+          {connections.map((c) => (
+            <div key={c.name} className="item-card" role="button" tabIndex={0}
+              onClick={() => setDraft(toDraft(c))}
+              onKeyDown={(e) => e.key === "Enter" && setDraft(toDraft(c))}>
+              <div className="head">
+                <IconChip icon={connectionIcon(c.type)} color="var(--source)" size={18} large />
+                <div style={{ minWidth: 0 }}>
+                  <div className="name mono" style={{ fontSize: 14 }}>{c.name}</div>
+                  <div className="sub">{c.description ?? c.type}</div>
+                </div>
+              </div>
+              <div className="foot">
+                <span className="pill">{c.type}</span>
+                {Object.keys(c.environments).map((e) => <span key={e} className="pill info">{e}</span>)}
+                {c.secret_fields.length > 0 && <span className="row" style={{ gap: 4 }} title={c.secret_fields.join(", ")}><KeyRound size={12} />{c.secret_fields.length} secret</span>}
+              </div>
+              <div className="actions">
+                <button className="ghost icon sm danger" title="Delete connection" aria-label={`Delete ${c.name}`} onClick={async (e) => {
+                  e.stopPropagation();
+                  if (confirm(`Delete connection "${c.name}"?`)) { await api.deleteConnection(c.name); reload(); }
+                }}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

@@ -1,6 +1,8 @@
+import { CircleAlert, Settings2 } from "lucide-react";
 import { useState } from "react";
 
 import type { Json } from "../../api/types";
+import { IconChip } from "../../components/icons";
 import { KeyValueEditor } from "../../components/KeyValueEditor";
 import { useEditor } from "../../store/editor";
 
@@ -17,10 +19,17 @@ export function PipelinePanel() {
 
   return (
     <div>
-      <h2>Pipeline</h2>
+      <div className="panel-head">
+        <IconChip icon={Settings2} color="var(--accent)" size={18} large />
+        <div className="text">
+          <div className="title">Pipeline settings</div>
+          <div className="sub">Select a node on the canvas to edit it</div>
+        </div>
+      </div>
       {global.length > 0 && (
-        <div className="card small" style={{ borderColor: "var(--danger)", marginBottom: 12 }}>
-          {global.map((i) => <div key={i.path + i.message} className="error-text">{i.path}: {i.message}</div>)}
+        <div className="callout danger">
+          <CircleAlert size={16} />
+          <div>{global.map((i) => <div key={i.path + i.message}>{i.path}: {i.message}</div>)}</div>
         </div>
       )}
       <div className="field">
@@ -62,7 +71,7 @@ export function PipelinePanel() {
       {Object.entries(envs).map(([name, env]) => (
         <div className="subform" key={name}>
           <div className="row">
-            <b>{name}</b>
+            <span className="pill info">{name}</span>
             <span className="spacer" />
             <button className="link small danger" onClick={() => { const next = { ...envs }; delete next[name]; setEnvs(next); }}>Remove</button>
           </div>
@@ -70,7 +79,7 @@ export function PipelinePanel() {
         </div>
       ))}
       <div className="row">
-        <input value={newEnv} placeholder="new environment, e.g. prod" onChange={(e) => setNewEnv(e.target.value)} />
+        <input value={newEnv} placeholder="New environment, e.g. prod" onChange={(e) => setNewEnv(e.target.value)} />
         <button disabled={!newEnv || newEnv in envs} onClick={() => { setEnvs({ ...envs, [newEnv]: { vars: {} } }); setNewEnv(""); }}>Add</button>
       </div>
       <p className="muted small">Runtime resources and Spark settings can be edited in the YAML tab.</p>

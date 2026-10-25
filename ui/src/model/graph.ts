@@ -197,12 +197,12 @@ export function autoLayout(nodes: FlowNode[], edges: FlowEdge[]): Record<string,
     const d = visit(n.id, new Set());
     const row = rows.get(d) ?? 0;
     rows.set(d, row + 1);
-    out[n.id] = { x: 40 + d * 260, y: 60 + row * 150 };
+    out[n.id] = { x: 40 + d * 290, y: 60 + row * 140 };
   }
   for (const n of nodes.filter((n) => n.data.kind === "quality")) {
     const tap = edges.find((e) => e.source === n.id && isTap(e));
     const anchor = tap ? out[tap.target] : undefined;
-    out[n.id] = anchor ? { x: anchor.x + 40, y: anchor.y - 110 } : { x: 40, y: 0 };
+    out[n.id] = anchor ? { x: anchor.x + 30, y: anchor.y - 120 } : { x: 40, y: 0 };
   }
   return out;
 }

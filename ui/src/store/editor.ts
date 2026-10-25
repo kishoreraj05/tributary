@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import type { Issue, Json, NodeAnalysis, Pipeline, PreviewResult } from "../api/types";
 import {
+  autoLayout,
   dataEdge,
   fromSpec,
   isTap,
@@ -57,6 +58,7 @@ interface EditorState {
   removeNode(id: string): void;
   setMeta(meta: PipelineMeta): void;
   applySpec(spec: Json): void;
+  arrange(): void;
   select(id: string | null): void;
   setEnv(env: string | null): void;
   setDrawer(tab: DrawerTab | null): void;
@@ -189,6 +191,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     const layout = Object.fromEntries(get().nodes.map((n) => [n.data.specId, n.position]));
     const { nodes, edges, meta } = fromSpec(spec, layout);
     set((s) => ({ nodes, edges, meta, selectedId: null, ...touched(s) }));
+  },
+
+  arrange() {
+    set((s) => {
+      const positions = autoLayout(s.nodes, s.edges);
+      return { nodes: s.nodes.map((n) => ({ ...n, position: positions[n.id] ?? n.position })), ...touched(s) };
+    });
   },
 
   select(id) {

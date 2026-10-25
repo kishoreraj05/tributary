@@ -2,11 +2,15 @@ import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 
+import { onThemeChange, resolvedTheme } from "../theme";
+
 // Bundle Monaco locally instead of loading it from a CDN at runtime.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
-export const monacoTheme = () => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "vs-dark" : "vs");
+export const monacoTheme = () => (resolvedTheme() === "dark" ? "vs-dark" : "vs");
+// Monaco's theme is global: switch every open editor when the app theme changes.
+onThemeChange(() => monaco.editor.setTheme(monacoTheme()));
 
 /** Tables (input aliases) and their columns visible to the SQL editor that has focus. */
 export const sqlContext: { tables: Record<string, string[]> } = { tables: {} };

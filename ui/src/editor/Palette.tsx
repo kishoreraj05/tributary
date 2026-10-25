@@ -1,4 +1,9 @@
-import type { Catalog } from "../api/types";
+import { ChevronDown, MousePointerClick, Search } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
+
+import type { Catalog, PluginMeta } from "../api/types";
+import { KIND_ICONS, pluginIcon } from "../components/icons";
 import type { NodeKind } from "../model/graph";
 import { useEditor } from "../store/editor";
 import { DRAG_MIME } from "./Canvas";
@@ -10,43 +15,244 @@ const GROUPS: { kind: NodeKind; label: string }[] = [
   { kind: "sink", label: "Sinks" },
 ];
 
-export function Palette({ catalog }: { catalog: Catalog }) {
+const KIND_HINT: Record<NodeKind, string> = {
+  source: "Reads data into the pipeline",
+  transform: "Reshapes data from its inputs",
+  quality: "Checks the data of the node it is attached to",
+  sink: "Writes data out of the pipeline",
+};
+
+type Item = Pick<PluginMeta, "type" | "display_name" | "description" | "capabilities" | "icon" | "options_schema">;
+
+const QUALITY_ITEM: Item = {
+  type: "quality",
+  display_name: "Quality checks",
+  description: "Validate rows before they move on: observe, fail the run, drop or quarantine failing rows.",
+  capabilities: [],
+  icon: "",
+  options_schema: {},
+};
+
+/** "Files (local / S3 / GCS / ADLS)" -> "Files": tiles show the short name, the card the full one. */
+const shortName = (name: string) => name.replace(/\s*\(.*\)\s*$/, "") || name;
+
+// ---------------------------------------------------------------------------
+// Width: the palette's right edge can be dragged; the width is remembered.
+
+const WIDTH_KEY = "tributary.paletteWidth";
+export const PALETTE_DEFAULT = 248;
+const MIN = 176;
+const MAX = 520;
+const clamp = (w: number) => Math.min(MAX, Math.max(MIN, Math.round(w)));
+
+export function usePaletteWidth(): [number, (w: number) => void] {
+  const [width, setWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(WIDTH_KEY));
+      return saved ? clamp(saved) : PALETTE_DEFAULT;
+    } catch {
+      return PALETTE_DEFAULT;
+    }
+  });
+  const update = (w: number) => {
+    const next = clamp(w);
+    setWidth(next);
+    try {
+      localStorage.setItem(WIDTH_KEY, String(next));
+    } catch {
+      /* not persisted */
+    }
+  };
+  return [width, update];
+}
+
+function ResizeHandle({ width, onResize }: { width: number; onResize(w: number): void }) {
+  const start = useRef<{ x: number; width: number } | null>(null);
+  const onPointerDown = (e: PointerEvent) => {
+    start.current = { x: e.clientX, width };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    document.body.classList.add("resizing");
+  };
+  const onPointerMove = (e: PointerEvent) => {
+    if (start.current) onResize(start.current.width + e.clientX - start.current.x);
+  };
+  const stop = () => {
+    start.current = null;
+    document.body.classList.remove("resizing");
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "ArrowLeft") onResize(width - 16);
+    if (e.key === "ArrowRight") onResize(width + 16);
+  };
+  return (
+    <div
+      className="resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize components panel"
+      aria-valuenow={width}
+      aria-valuemin={MIN}
+      aria-valuemax={MAX}
+      tabIndex={0}
+      title="Drag to resize · double-click to reset"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={stop}
+      onPointerCancel={stop}
+      onDoubleClick={() => onResize(PALETTE_DEFAULT)}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+interface Hover {
+  item: Item;
+  kind: NodeKind;
+  rect: DOMRect;
+  unsupported: boolean;
+}
+
+export function Palette({ catalog, width, onResize }: { catalog: Catalog; width: number; onResize(w: number): void }) {
   const addNode = useEditor((s) => s.addNode);
   const mode = useEditor((s) => String(s.meta.pipeline.mode ?? "batch"));
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<NodeKind>>(new Set());
+  const [hover, setHover] = useState<Hover | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const q = query.trim().toLowerCase();
+
+  const showSoon = (next: Hover) => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setHover(next), hover ? 0 : 280);
+  };
+  const hide = () => {
+    window.clearTimeout(timer.current);
+    setHover(null);
+  };
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const add = (kind: NodeKind, type: string) => {
+    hide();
+    addNode(kind, type, { x: 120 + Math.random() * 80, y: 80 + Math.random() * 80 });
+  };
+  const toggle = (kind: NodeKind) =>
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
 
   return (
-    <aside className="palette">
-      <div className="muted small" style={{ marginBottom: 8 }}>Drag onto the canvas, or click to add.</div>
+    <aside className="palette" onScroll={hide}>
+      <div className="palette-top">
+        <div className="search">
+          <Search size={14} />
+          <input value={query} placeholder="Search components" onChange={(e) => setQuery(e.target.value)} />
+        </div>
+      </div>
       {GROUPS.map(({ kind, label }) => {
-        const items =
-          kind === "quality"
-            ? [{ type: "quality", display_name: "Quality checks", description: "Checks attached to a node or sink", capabilities: [] as string[] }]
-            : catalog.components[kind];
+        const all: Item[] = kind === "quality" ? [QUALITY_ITEM] : catalog.components[kind];
+        const items = all.filter((p) => !q || `${p.display_name} ${p.type} ${p.description}`.toLowerCase().includes(q));
+        if (!items.length) return null;
+        const KindIcon = KIND_ICONS[kind];
+        const open = !collapsed.has(kind) || Boolean(q);
         return (
-          <div key={kind}>
-            <h3>{label}</h3>
-            {items.map((p) => {
-              const unsupported = kind === "source" && mode === "streaming" && !p.capabilities.includes("streaming");
-              return (
-                <div
-                  key={p.type}
-                  className="palette-item"
-                  style={{ ["--kind-color" as string]: `var(--${kind})`, opacity: unsupported ? 0.55 : 1 }}
-                  draggable
-                  title={p.description + (unsupported ? " (batch only)" : "")}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ kind, type: p.type }));
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                  onClick={() => addNode(kind, p.type, { x: 120 + Math.random() * 80, y: 80 + Math.random() * 80 })}
-                >
-                  {p.display_name}
-                </div>
-              );
-            })}
-          </div>
+          <section key={kind} className="palette-group" style={{ ["--c" as string]: `var(--${kind})` }}>
+            <button className="group-head" aria-expanded={open} onClick={() => toggle(kind)}>
+              <KindIcon size={13} />
+              {label}
+              <span className="count">{items.length}</span>
+              <span className="spacer" />
+              <ChevronDown size={14} className={`chevron${open ? "" : " closed"}`} />
+            </button>
+            {open && (
+              <div className="tile-grid">
+                {items.map((p) => {
+                  const unsupported = kind === "source" && mode === "streaming" && !p.capabilities.includes("streaming");
+                  const Icon = pluginIcon(p.icon, kind);
+                  return (
+                    <div
+                      key={p.type}
+                      className={`tile${unsupported ? " disabled" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Add ${p.display_name}`}
+                      draggable
+                      onDragStart={(e) => {
+                        hide();
+                        e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ kind, type: p.type }));
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onClick={() => add(kind, p.type)}
+                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), add(kind, p.type))}
+                      onMouseEnter={(e) => showSoon({ item: p, kind, rect: e.currentTarget.getBoundingClientRect(), unsupported })}
+                      onMouseLeave={hide}
+                      onFocus={(e) => setHover({ item: p, kind, rect: e.currentTarget.getBoundingClientRect(), unsupported })}
+                      onBlur={hide}
+                    >
+                      <span className="tile-icon">
+                        <Icon size={24} strokeWidth={1.8} />
+                        <span className="tile-badge"><KindIcon size={10} strokeWidth={2.4} /></span>
+                      </span>
+                      <span className="tile-label">{shortName(p.display_name)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         );
       })}
+      {hover && <DetailsCard hover={hover} catalog={catalog} />}
+      <ResizeHandle width={width} onResize={(w) => { hide(); onResize(w); }} />
     </aside>
+  );
+}
+
+function DetailsCard({ hover, catalog }: { hover: Hover; catalog: Catalog }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(hover.rect.top);
+  const { item, kind, rect, unsupported } = hover;
+  // Keep the card on screen: align with the tile, but never past the bottom edge.
+  useLayoutEffect(() => {
+    const height = ref.current?.offsetHeight ?? 0;
+    setTop(Math.max(8, Math.min(rect.top - 6, window.innerHeight - height - 8)));
+  }, [rect]);
+
+  const Icon = pluginIcon(item.icon, kind);
+  const required = item.options_schema.required ?? [];
+  const caps = item.capabilities.filter((c) => c === "batch" || c === "streaming");
+  const checks = kind === "quality" ? catalog.components.check.map((c) => c.type) : [];
+
+  return createPortal(
+    <div ref={ref} className="details-card" role="tooltip" style={{ top, left: rect.right + 12, ["--c" as string]: `var(--${kind})` }}>
+      <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
+        <span className="tile-icon lg"><Icon size={22} strokeWidth={1.8} /></span>
+        <div style={{ minWidth: 0 }}>
+          <div className="details-title">{item.display_name}</div>
+          <div className="details-sub">
+            <span className="mono">{item.type}</span> · {kind}
+          </div>
+        </div>
+      </div>
+      <p>{item.description}</p>
+      <div className="details-meta">
+        <span className="pill kind-pill">{KIND_HINT[kind]}</span>
+        {caps.map((c) => <span key={c} className="pill info">{c}</span>)}
+        {kind === "sink" && <span className="pill info">batch & streaming</span>}
+      </div>
+      {required.length > 0 && (
+        <div className="details-row"><span className="muted">Required</span> <span className="mono">{required.join(", ")}</span></div>
+      )}
+      {checks.length > 0 && (
+        <div className="details-row"><span className="muted">Checks</span> <span className="mono">{checks.join(", ")}</span></div>
+      )}
+      {unsupported && <div className="details-row error-text">Batch only: this pipeline is in streaming mode.</div>}
+      <div className="details-foot"><MousePointerClick size={13} />Drag onto the canvas, or click to add</div>
+    </div>,
+    document.body,
   );
 }

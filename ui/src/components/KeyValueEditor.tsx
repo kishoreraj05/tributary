@@ -30,12 +30,12 @@ export function KeyValueEditor({ value, onChange, coerce = true }: { value: Json
         <div className="kv" key={i}>
           <input value={row.key} placeholder="key" onChange={(e) => update(rows.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))} />
           <input value={row.value} placeholder="value" onChange={(e) => update(rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))} />
-          <button type="button" title="Remove" onClick={() => update(rows.filter((_, j) => j !== i))}>
+          <button type="button" className="ghost icon" title="Remove" aria-label="Remove" onClick={() => update(rows.filter((_, j) => j !== i))}>
             ×
           </button>
         </div>
       ))}
-      <button type="button" className="small" onClick={() => setRows([...rows, { key: "", value: "" }])}>
+      <button type="button" className="sm" onClick={() => setRows([...rows, { key: "", value: "" }])}>
         + Add
       </button>
     </div>

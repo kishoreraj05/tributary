@@ -1,8 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  Cloud,
+  CloudOff,
+  GitCommitHorizontal,
+  Loader2,
+  Network,
+  Play,
+  Save,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../api/client";
 import { useCatalog } from "../api/hooks";
+import { IconChip } from "../components/icons";
 import type { VersionSummary } from "../api/types";
 import { layoutOf, toSpec } from "../model/graph";
 import { problemCount, useEditor } from "../store/editor";
@@ -10,7 +25,7 @@ import { Canvas } from "./Canvas";
 import { Drawer } from "./Drawer";
 import { NodePanel } from "./panels/NodePanel";
 import { PipelinePanel } from "./panels/PipelinePanel";
-import { Palette } from "./Palette";
+import { Palette, usePaletteWidth } from "./Palette";
 import { draftStatus, loadLatestVersionSpec, saveVersion, VersionError, type DraftStatus } from "./versioning";
 
 export function EditorPage() {
@@ -18,6 +33,7 @@ export function EditorPage() {
   const catalog = useCatalog();
   const { pipeline, nodes, selectedId, load, notice, set } = useEditor();
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [paletteWidth, setPaletteWidth] = usePaletteWidth();
 
   useEffect(() => {
     api
@@ -36,31 +52,33 @@ export function EditorPage() {
     return () => clearTimeout(timer);
   }, [notice, set]);
 
-  if (loadError) return <div className="page error-text">{loadError}</div>;
-  if (!pipeline || pipeline.id !== id || !catalog) return <div className="page muted">Loading…</div>;
+  if (loadError) return <div className="page"><div className="callout danger"><CircleAlert size={16} />{loadError}</div></div>;
+  if (!pipeline || pipeline.id !== id || !catalog)
+    return <div className="page row muted"><Loader2 size={16} className="spin" /> Loading pipeline…</div>;
   const selected = nodes.find((n) => n.id === selectedId);
 
   return (
     <div className="editor">
       <Toolbar />
-      <div className="workspace">
-        <Palette catalog={catalog} />
+      <div className="workspace" style={{ ["--palette-w" as string]: `${paletteWidth}px` }}>
+        <Palette catalog={catalog} width={paletteWidth} onResize={setPaletteWidth} />
         <div className="center">
           <Canvas />
           <Drawer />
         </div>
         <aside className="side">{selected ? <NodePanel key={selected.id} node={selected} /> : <PipelinePanel />}</aside>
       </div>
-      {notice && (
-        <div className="card small" style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 40 }}>
-          {notice}
-        </div>
-      )}
+      {notice && <div className="toast"><CircleCheck size={15} />{notice}</div>}
     </div>
   );
 }
 
-const SAVE_LABEL = { saved: "Saved", dirty: "Unsaved changes", saving: "Saving…", error: "Save failed" };
+const SAVE_STATE = {
+  saved: { icon: Cloud, label: "Saved" },
+  dirty: { icon: Cloud, label: "Unsaved" },
+  saving: { icon: Loader2, label: "Saving…" },
+  error: { icon: CloudOff, label: "Save failed" },
+};
 
 function Toolbar() {
   const state = useEditor();
@@ -71,28 +89,31 @@ function Toolbar() {
   const [dialog, setDialog] = useState<"version" | "run" | null>(null);
   const envs = Object.keys((meta.environments as object) ?? {});
   if (!pipeline) return null;
+  const save = SAVE_STATE[saveState];
   return (
     <div className="toolbar">
-      <Link to="/" className="small">Pipelines</Link>
-      <b>{pipeline.name}</b>
+      <div className="crumbs">
+        <Link to="/">Pipelines</Link>
+        <ChevronRight size={14} className="muted" />
+        <span className="name">{pipeline.name}</span>
+      </div>
       <VersionPill status={status} version={pipeline.latest_version} onClick={() => setDialog("version")} />
-      <span className={`small ${saveState === "error" ? "error-text" : "muted"}`}>{SAVE_LABEL[saveState]}</span>
-      <span className="spacer" />
-      <span className="small muted">
-        {checking === "shallow" ? "Validating…" : checking === "deep" ? "Checking columns…" : problems ? `${problems} problem${problems === 1 ? "" : "s"}` : "Valid"}
+      <span className={`status${saveState === "error" ? " bad" : ""}`} title="Drafts save automatically">
+        <save.icon size={14} className={saveState === "saving" ? "spin" : ""} />{save.label}
       </span>
-      <label className="row small" style={{ margin: 0 }}>
-        env
+      <span className="spacer" />
+      <ValidationStatus checking={checking} problems={problems} onClick={() => setDrawer("problems")} />
+      <span className="sep" />
+      <label className="env-select" style={{ margin: 0 }}>
+        Env
         <select value={env ?? ""} onChange={(e) => setEnv(e.target.value || null)}>
           {envs.length === 0 && <option value="">default</option>}
           {envs.map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
       </label>
-      <button onClick={() => setDrawer("plan")}>Plan</button>
-      <button onClick={() => setDialog("version")}>Save version</button>
-      <button className="primary" onClick={() => setDialog("run")}>
-        Run
-      </button>
+      <button className="ghost" onClick={() => setDrawer("plan")} title="Execution plan and resources"><Network size={15} />Plan</button>
+      <button onClick={() => setDialog("version")}><Save size={15} />Save version</button>
+      <button className="primary" onClick={() => setDialog("run")}><Play size={14} fill="currentColor" />Run</button>
       {dialog === "version" && <VersionDialog status={status} onClose={() => setDialog(null)} />}
       {dialog === "run" && (
         <RunDialog
@@ -105,15 +126,27 @@ function Toolbar() {
   );
 }
 
+function ValidationStatus({ checking, problems, onClick }: { checking: string; problems: number; onClick(): void }) {
+  if (checking !== "idle")
+    return <span className="status"><Loader2 size={14} className="spin" />{checking === "deep" ? "Checking columns…" : "Validating…"}</span>;
+  if (problems)
+    return (
+      <button className="pill bad" onClick={onClick} style={{ border: "none", height: 26 }}>
+        <CircleAlert size={13} />{problems} problem{problems === 1 ? "" : "s"}
+      </button>
+    );
+  return <span className="status ok"><CircleCheck size={14} />Valid</span>;
+}
+
 function VersionPill({ status, version, onClick }: { status: DraftStatus; version: number; onClick(): void }) {
   if (!version) {
-    return <button className="pill warn" style={{ border: "none" }} title="Runs need a saved version" onClick={onClick}>not versioned yet</button>;
+    return <button className="pill warn" title="Runs need a saved version" onClick={onClick}><span className="dot" />Not versioned</button>;
   }
-  if (!status.diff) return <span className="pill">v{version}</span>;
-  if (status.upToDate) return <span className="pill ok" title="The draft matches the latest version">v{version}</span>;
+  if (!status.diff) return <span className="pill"><GitCommitHorizontal size={12} />v{version}</span>;
+  if (status.upToDate) return <span className="pill ok" title="The draft matches the latest version"><GitCommitHorizontal size={12} />v{version}</span>;
   return (
-    <button className="pill warn" style={{ border: "none" }} title={`Not in v${version}:\n${status.lines.join("\n")}`} onClick={onClick}>
-      v{version} · draft has unsaved changes
+    <button className="pill warn" title={`Not in v${version}:\n${status.lines.join("\n")}`} onClick={onClick}>
+      <span className="dot" />v{version} · unsaved changes
     </button>
   );
 }
@@ -121,19 +154,33 @@ function VersionPill({ status, version, onClick }: { status: DraftStatus; versio
 function ChangeList({ status, version }: { status: DraftStatus; version: number }) {
   if (!status.lines.length) return null;
   return (
-    <div className="card small" style={{ borderColor: "var(--warn)", background: "var(--warn-soft)", margin: "8px 0" }}>
-      <b>Changes not in v{version}</b>
-      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{status.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+    <div className="callout warn">
+      <TriangleAlert size={16} />
+      <div>
+        <b>Changes not in v{version}</b>
+        <ul>{status.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+      </div>
     </div>
   );
 }
 
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose(): void }) {
+function Modal({ title, icon, children, footer, onClose }: { title: string; icon?: ReactNode; children: ReactNode; footer?: ReactNode; onClose(): void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>{title}</h2>
+      <div className="modal" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          {icon}
+          <h2>{title}</h2>
+          <span className="spacer" />
+          <button className="ghost icon sm" onClick={onClose} aria-label="Close"><X size={15} /></button>
+        </div>
         {children}
+        {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>
   );
@@ -156,20 +203,27 @@ function VersionDialog({ status, onClose }: { status: DraftStatus; onClose(): vo
     }
   };
   return (
-    <Modal title="Save version" onClose={onClose}>
-      <p className="muted small">Versions are validated for every environment and can't be changed afterwards. Runs use versions.</p>
+    <Modal
+      title="Save version"
+      icon={<IconChip icon={Save} color="var(--accent)" />}
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={busy} onClick={save}>
+            {busy ? <Loader2 size={14} className="spin" /> : <Save size={14} />}Save v{(pipeline?.latest_version ?? 0) + 1}
+          </button>
+        </>
+      }
+    >
+      <p className="muted small" style={{ marginTop: 0 }}>Versions are validated for every environment and can't be changed afterwards. Runs always use a version.</p>
       {status.upToDate && <p className="small">The draft is identical to v{pipeline?.latest_version}; saving creates a copy.</p>}
       <ChangeList status={status} version={pipeline?.latest_version ?? 0} />
       <div className="field">
         <label>Message</label>
-        <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What changed?" />
+        <input autoFocus value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="What changed?" />
       </div>
-      {errors.map((e) => <div key={e} className="error-text small">{e}</div>)}
-      <div className="row" style={{ marginTop: 12 }}>
-        <span className="spacer" />
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={busy} onClick={save}>Save version</button>
-      </div>
+      <Errors errors={errors} />
     </Modal>
   );
 }
@@ -206,7 +260,21 @@ function RunDialog({ status, onClose, onStarted }: { status: DraftStatus; onClos
   };
 
   return (
-    <Modal title="Run pipeline" onClose={onClose}>
+    <Modal
+      title="Run pipeline"
+      icon={<IconChip icon={Play} color="var(--ok)" />}
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose}>Cancel</button>
+          {draftMissing && latest > 0 && <button disabled={busy} onClick={() => start(false)}>Run v{latest} as saved</button>}
+          <button className="primary" disabled={busy} onClick={() => start(draftMissing)}>
+            {busy ? <Loader2 size={14} className="spin" /> : <Play size={13} fill="currentColor" />}
+            {draftMissing ? `Save as v${latest + 1} & run` : "Start run"}
+          </button>
+        </>
+      }
+    >
       {latest > 0 && (
         <div className="field">
           <label>Version</label>
@@ -220,16 +288,17 @@ function RunDialog({ status, onClose, onStarted }: { status: DraftStatus; onClos
         <select value={runEnv} onChange={(e) => setRunEnv(e.target.value)}>
           {(envs.length ? envs : ["default"]).map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
+        <div className="desc">Connections and variables of this environment are used.</div>
       </div>
       {draftMissing ? (
         <>
           {latest ? (
             <>
-              <p className="small" style={{ marginBottom: 0 }}>Runs use saved versions. These draft changes would <b>not</b> run with v{latest}:</p>
               <ChangeList status={status} version={latest} />
+              <p className="small muted" style={{ marginTop: -4 }}>Runs use saved versions, so these changes would <b>not</b> run with v{latest}.</p>
             </>
           ) : (
-            <p className="small">Runs use saved versions and this pipeline has none yet. Save the draft as v1 to run it.</p>
+            <div className="callout warn"><TriangleAlert size={16} /><div>This pipeline has no saved version yet. The draft will be saved as v1, then run.</div></div>
           )}
           <div className="field">
             <label>Version message</label>
@@ -237,22 +306,23 @@ function RunDialog({ status, onClose, onStarted }: { status: DraftStatus; onClos
           </div>
         </>
       ) : (
-        <p className="muted small">
+        <p className="row small muted" style={{ margin: 0 }}>
+          <CircleCheck size={14} className="status ok" />
           {version === latest ? `The draft matches v${latest}.` : `Runs v${version} exactly as it was saved.`}
         </p>
       )}
-      {errors.map((e) => <div key={e} className="error-text small">{e}</div>)}
-      <div className="row" style={{ marginTop: 12 }}>
-        <span className="spacer" />
-        <button onClick={onClose}>Cancel</button>
-        {draftMissing && latest > 0 && <button disabled={busy} onClick={() => start(false)}>Run v{latest} as saved</button>}
-        {draftMissing ? (
-          <button className="primary" disabled={busy} onClick={() => start(true)}>Save as v{latest + 1} &amp; run</button>
-        ) : (
-          <button className="primary" disabled={busy} onClick={() => start(false)}>Start run</button>
-        )}
-      </div>
+      <Errors errors={errors} />
     </Modal>
+  );
+}
+
+function Errors({ errors }: { errors: string[] }) {
+  if (!errors.length) return null;
+  return (
+    <div className="callout danger" style={{ marginTop: 12, marginBottom: 0 }}>
+      <CircleAlert size={16} />
+      <div>{errors.map((e) => <div key={e}>{e}</div>)}</div>
+    </div>
   );
 }
 

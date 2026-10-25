@@ -1,8 +1,10 @@
+import { CircleAlert, FlaskConical, Link2Off, Plus, Trash2, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "../../api/client";
 import { plugin, useCatalog, useConnections } from "../../api/hooks";
 import type { Catalog, Category, Json } from "../../api/types";
+import { IconChip, pluginIcon } from "../../components/icons";
 import { SchemaForm } from "../../components/SchemaForm";
 import { isTap, type FlowNode } from "../../model/graph";
 import { nodeIssues, useEditor } from "../../store/editor";
@@ -14,7 +16,8 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function NodePanel({ node }: { node: FlowNode }) {
   const catalog = useCatalog();
-  const { nodes, issues, analysis, updateNode, removeNode, renameNode } = useEditor();
+  const { nodes, edges, issues, analysis, updateNode, removeNode, renameNode } = useEditor();
+  const unattached = node.data.kind === "quality" && !edges.some((e) => e.source === node.id && isTap(e));
   const [draftId, setDraftId] = useState(node.data.specId);
   const [idError, setIdError] = useState<string | null>(null);
   const messages = useMemo(() => nodeIssues({ issues, analysis }, node.data.specId), [issues, analysis, node.data.specId]);
@@ -32,27 +35,48 @@ export function NodePanel({ node }: { node: FlowNode }) {
 
   return (
     <div key={node.id}>
-      <div className="row">
-        <span className="pill" style={{ color: `var(--${kind})` }}>{kind}</span>
-        <span className="muted small">{kind === "quality" ? "data quality" : type}</span>
-        <span className="spacer" />
-        {kind !== "quality" && (
-          <button onClick={() => runPreview(node.data.specId)} title="Preview this node's output on sample data">
-            ▶ Test
-          </button>
-        )}
-        <button className="danger" onClick={() => removeNode(node.id)}>Delete</button>
-      </div>
-      <div className="field" style={{ marginTop: 12 }}>
-        <label>Id</label>
-        <input value={draftId} onChange={(e) => setDraftId(e.target.value)} onBlur={commitId} onKeyDown={(e) => e.key === "Enter" && commitId()} />
-        {idError && <div className="desc error-text">{idError}</div>}
+      <div className="panel-head">
+        <IconChip
+          icon={pluginIcon(kind === "quality" ? undefined : plugin(catalog, kind as Category, type)?.icon, kind)}
+          color={`var(--${kind})`}
+          size={18}
+          large
+        />
+        <div className="text">
+          <div className="title">{node.data.specId}</div>
+          <div className="sub">
+            {kind === "quality" ? "Data quality checks" : `${plugin(catalog, kind as Category, type)?.display_name ?? type} · ${kind}`}
+          </div>
+        </div>
+        <button
+          className="sm"
+          disabled={unattached}
+          onClick={() => runPreview(node.data.specId)}
+          title={
+            unattached
+              ? "Attach this block to a node first"
+              : kind === "quality"
+                ? "Run these checks on sample data and see which rows fail"
+                : "Preview this node's output on sample data"
+          }
+        >
+          <FlaskConical size={13} />Test
+        </button>
+        <button className="ghost icon sm danger" onClick={() => removeNode(node.id)} title="Delete node" aria-label="Delete node">
+          <Trash2 size={14} />
+        </button>
       </div>
       {messages.length > 0 && (
-        <div className="card small" style={{ borderColor: "var(--danger)", marginBottom: 12 }}>
-          {messages.map((m) => <div key={m} className="error-text">{m}</div>)}
+        <div className="callout danger">
+          <CircleAlert size={16} />
+          <div>{messages.map((m) => <div key={m}>{m}</div>)}</div>
         </div>
       )}
+      <div className="field">
+        <label>Node id</label>
+        <input className="mono" value={draftId} onChange={(e) => setDraftId(e.target.value)} onBlur={commitId} onKeyDown={(e) => e.key === "Enter" && commitId()} />
+        {idError ? <div className="desc error-text">{idError}</div> : <div className="desc">Used as the table name in downstream SQL, unless the input is renamed.</div>}
+      </div>
       {kind === "source" && <SourceFields node={node} catalog={catalog} path={path} />}
       {kind === "transform" && <TransformFields node={node} catalog={catalog} path={path} />}
       {kind === "sink" && <SinkFields node={node} catalog={catalog} path={path} />}
@@ -112,10 +136,12 @@ function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalo
     <>
       <ConnectionField node={node} path={path} />
       {meta.pipeline.mode === "streaming" && (
-        <label className="row field" style={{ color: "var(--text)" }}>
-          <input type="checkbox" checked={Boolean(extra.stream)} onChange={(e) => setExtra({ stream: e.target.checked || undefined })} />
-          This is the streaming source
-        </label>
+        <div className="field">
+          <label className="check">
+            <input type="checkbox" checked={Boolean(extra.stream)} onChange={(e) => setExtra({ stream: e.target.checked || undefined })} />
+            This is the streaming source
+          </label>
+        </div>
       )}
       <h3>Schema</h3>
       <div className="field">
@@ -135,6 +161,7 @@ function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalo
       )}
       <h3>Sample data</h3>
       <div className="field">
+        <label className="row" style={{ fontWeight: 500, color: "var(--muted)" }}><Upload size={13} />CSV, JSON or Parquet</label>
         <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
         <div className="desc">
           {sample ? (
@@ -173,8 +200,10 @@ function TransformFields({ node, path }: { node: FlowNode; catalog: Catalog; pat
           const cols = analysis[upstream.data.specId]?.schema?.fields;
           return (
             <div className="chip" key={edge.id} title={`Table name for ${upstream.data.specId} in SQL`}>
-              <input value={edge.data?.alias ?? ""} placeholder={upstream.data.specId} onChange={(e) => setAlias(edge.id, e.target.value)} />
-              <span className="muted"> ← {upstream.data.specId}</span>
+              <div className="row">
+                <input value={edge.data?.alias ?? ""} placeholder={upstream.data.specId} onChange={(e) => setAlias(edge.id, e.target.value)} />
+                <span className="muted">← {upstream.data.specId}</span>
+              </div>
               <div className="cols">{cols ? cols.map((f) => f.name).join(", ") : "columns appear after the check"}</div>
             </div>
           );
@@ -246,7 +275,7 @@ function QualityFields({ node, catalog, path }: { node: FlowNode; catalog: Catal
             <b>{target.data.specId}</b>
           </>
         ) : (
-          <span className="error-text">Not attached: drag from this block's bottom handle to the amber handle on top of a node.</span>
+          <div className="callout warn"><Link2Off size={16} /><div>Not attached yet. Drag from this block's bottom handle to the amber handle on top of the node it should check.</div></div>
         )}
       </div>
       <div className="field">
@@ -281,7 +310,7 @@ function QualityFields({ node, catalog, path }: { node: FlowNode; catalog: Catal
           </div>
         );
       })}
-      <button onClick={() => setExtra({ checks: [...checks, { type: "not_null" }] })}>+ Add check</button>
+      <button className="sm" onClick={() => setExtra({ checks: [...checks, { type: "not_null" }] })}><Plus size={13} />Add check</button>
 
       <h3>Results go to</h3>
       {results.map((t, i) => (
@@ -295,7 +324,7 @@ function QualityFields({ node, catalog, path }: { node: FlowNode; catalog: Catal
           onChange={(v) => setExtra({ results_sinks: v ? results.map((x, j) => (j === i ? v : x)) : results.filter((_, j) => j !== i) })}
         />
       ))}
-      <button onClick={() => setExtra({ results_sinks: [...results, { type: "console" }] })}>+ Add results sink</button>
+      <button className="sm" onClick={() => setExtra({ results_sinks: [...results, { type: "console" }] })}><Plus size={13} />Add results sink</button>
       <div className="desc small" style={{ marginTop: 4 }}>Runs started from here always keep results in the run history too.</div>
 
       {extra.action === "quarantine" && (

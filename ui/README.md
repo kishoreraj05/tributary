@@ -24,10 +24,11 @@ npm run build      # typecheck + production bundle
 ## What's in it
 
 - **Canvas** ([React Flow](https://reactflow.dev)):
-  - Drag sources, transforms, sinks and quality blocks from the palette, or click a palette item to add it.
+  - The components panel is an icon library: drag a tile onto the canvas or click it to add it. Hover a tile for its details (description, batch/streaming support, required settings). Groups collapse, and the panel's right edge can be dragged to resize it (double-click resets).
   - Connect a node's right handle to the next node's left handle. The edge label is the table name used in SQL, editable on the transform.
   - Attach a quality block by dragging from its bottom handle to the amber handle on top of a node. A source or transform becomes `attach_to`; a sink becomes `before`.
   - The canvas refuses invalid edges: cycles, a second input into a sink, or inputs into a source.
+  - The grid button in the canvas controls (**Tidy layout**) re-arranges the graph and fits it in view.
 - **Node panel:**
   - Forms are built from each plugin's JSON Schema. Required fields and fields you've set are shown; the rest fold under "More options".
   - Field-level errors from validation appear next to the field.
@@ -35,15 +36,19 @@ npm run build      # typecheck + production bundle
   - The SQL editor (Monaco) shows the input tables with their columns, autocompletes them, and underlines unknown tables and columns.
 - **Live validation:** each edit is checked structurally (about 0.5 s after you stop typing). Once that passes, column-level analysis runs on the backend's Spark session. Errors appear as badges on nodes and in the Problems tab.
 - **Drawer:**
-  - **Preview:** ▶ Test on any node shows sample rows and DQ results; sinks are a dry run.
+  - **Preview:** ▶ Test on any node shows sample rows and DQ results; sinks are a dry run. Testing a quality block shows the rows it checks, failing rows first, with the checks each row fails.
   - **Problems:** every structural and column-level error.
   - **YAML:** two-way. Edit the spec and apply it back to the canvas.
   - **Plan:** cache points, quality gates and the chosen Spark resources.
   - **Runs:** live status and logs over WebSocket, DQ results, cancel.
 - **Saving:** the draft autosaves after every change. *Save version* validates for every environment and freezes it; *Run* starts a saved version in a chosen environment.
-  - **Version status:** the toolbar pill is green when the draft matches the latest version. It turns amber ("draft has unsaved changes") and lists the nodes that differ when it doesn't. Layout moves and formatting-only differences don't count.
+  - **Version status:** the toolbar pill is green when the draft matches the latest version. It turns amber ("vN · unsaved changes") and lists the nodes that differ when it doesn't. Layout moves and formatting-only differences don't count.
   - **Run dialog:** when the draft has changes the latest version lacks, the dialog lists them and offers *Save as vN+1 & run* or *Run vN as saved*.
 - **Connections page:** settings per environment. Fields that look secret (password, token, …) are marked secret automatically, sent encrypted and never shown again.
+
+## Look and feel
+
+The design tokens (colours per node kind, surfaces, elevation, light and dark themes) live at the top of `src/styles.css`. The **Day / Night / Auto** switch in the top bar sets `data-theme` on `<html>` and is remembered per browser; Auto follows the OS setting. Text colours are chosen to meet WCAG AA contrast (4.5:1) on every surface in both themes. Icons come from [Lucide](https://lucide.dev), and the Inter font is bundled locally through Fontsource, so no CDN is needed.
 
 ## Code map
 

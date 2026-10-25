@@ -117,7 +117,7 @@ function Field({ name, schema: raw, root, value, required, errors, onChange, cus
   } else if (schema.type === "boolean") {
     const checked = value === undefined ? Boolean(schema.default) : Boolean(value);
     input = (
-      <label className="row" style={{ color: "var(--text)", fontSize: 13 }}>
+      <label className="check">
         <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
         {label}
       </label>
@@ -159,7 +159,7 @@ function Field({ name, schema: raw, root, value, required, errors, onChange, cus
               </button>
             </div>
           ))}
-          <button type="button" className="small" onClick={() => onChange([...list, {}])}>
+          <button type="button" className="sm" onClick={() => onChange([...list, {}])}>
             + Add
           </button>
         </div>
