@@ -1,0 +1,85 @@
+# Batch: CSV orders -> SQL -> quality gate (drop) -> Delta Lake tables on local disk.
+# Run from the repository root (the first run downloads the Delta jars):
+#   tributary plan examples/csv_to_delta.yaml
+#   tributary preview examples/csv_to_delta.yaml --node orders_merge
+#   tributary run examples/csv_to_delta.yaml           # run it twice: the merge stays at 6 rows
+#
+# Delta tables live at a path, so the same sinks work on S3, GCS or ADLS by changing
+# `lake_dir` per environment (s3a://bucket/lake, gs://..., abfss://...).
+version: 1
+pipeline:
+  id: orders_to_delta
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      lake_dir: /tmp/tributary/lake
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  # Upsert: re-running the pipeline updates existing orders instead of duplicating them.
+  - id: orders_merge
+    type: delta
+    input: orders_clean
+    options:
+      path: "${env.lake_dir}/orders"
+      mode: merge
+      merge_keys: [order_id]
+      update_condition: "s.order_ts >= t.order_ts"  # an older copy of an order never overwrites a newer one
+      partition_by: [country]                     # applied when the table is created
+      schema_evolution: true                      # new columns in the data are added to the table
+      write_options:
+        delta.enableChangeDataFeed: true          # table property, set on creation: records every change,
+                                                  # so delta_changes_to_delta.yaml can stream them
+
+  # Overwrite the partitions present in this run's data, keep the others.
+  - id: revenue_out
+    type: delta
+    input: revenue_by_country
+    options:
+      path: "${env.lake_dir}/revenue_by_country"
+      mode: overwrite_partitions
+      partition_by: [country]
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

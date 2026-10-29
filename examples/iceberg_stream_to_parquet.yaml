@@ -1,0 +1,55 @@
+# Streaming from an Apache Iceberg table: every append to the table becomes a micro-batch.
+# Run examples/csv_to_iceberg.yaml first (and again later: the merge makes a new snapshot).
+#   tributary run examples/iceberg_stream_to_parquet.yaml     # processes the appends so far, then stops
+# With trigger available_now each run continues from the checkpoint and only new rows arrive.
+#
+# A stream replays appends only. Overwrites and deletes (a merge that updates rows, an
+# overwrite_partitions write, ...) stop it unless they are skipped, as below.
+version: 1
+pipeline:
+  id: iceberg_orders_stream
+  mode: streaming
+  streaming:
+    checkpoint_location: /tmp/tributary/iceberg_orders_stream/_checkpoint
+    trigger: available_now
+
+environments:
+  dev:
+    vars:
+      out_dir: /tmp/tributary/iceberg_orders_stream
+    connections:
+      lake:
+        type: iceberg
+        catalog_type: hadoop
+        warehouse: /tmp/tributary/warehouse
+        catalog_name: lake
+
+sources:
+  - id: orders_src
+    type: iceberg
+    connection: lake
+    options:
+      table: sales.orders
+      streaming_skip_overwrite_snapshots: true
+      streaming_skip_delete_snapshots: true
+      # stream_from_timestamp: 2024-05-01T00:00:00Z   # skip older snapshots; default: the whole table first
+      # max_files_per_trigger: 10                     # throttle (processing_time trigger only on Iceberg < 1.10)
+
+transforms:
+  - id: orders_by_day
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, country, to_date(order_ts) AS order_date
+        FROM orders
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_by_day
+    options:
+      path: "${env.out_dir}/orders"
+      format: parquet
+      mode: append
+      partition_by: [order_date]

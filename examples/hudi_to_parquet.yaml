@@ -1,0 +1,77 @@
+# Batch: Apache Hudi table -> SQL -> quality gate -> Parquet files, reading only what changed.
+# Run csv_to_hudi.yaml first to create the table, then (the first run downloads the Hudi Spark bundle):
+#   tributary plan examples/hudi_to_parquet.yaml
+#   tributary preview examples/hudi_to_parquet.yaml --node orders_changes
+#   tributary run examples/hudi_to_parquet.yaml   # run it again: nothing new until the table changes
+#
+# The storage root comes from the same connection the Hudi sinks use, so one connection
+# describes the lake for reading and writing. In the UI, create a connection of type `hudi`
+# with the same fields.
+version: 1
+pipeline:
+  id: orders_from_hudi
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      out: /tmp/tributary/out
+      # Where the first run starts: `earliest` reads every commit; a Hudi instant (as in
+      # _hoodie_commit_time) or a timestamp / date in the timeline's time zone ("2024-06-04
+      # 08:00:00") reads the commits after it. Later runs continue from the checkpoint.
+      since: earliest
+    connections:
+      lake:
+        type: hudi
+        base_path: /tmp/tributary/hudi                 # or s3a://bucket/lake, gs://..., abfss://...
+
+sources:
+  # Rows changed by the commits since the previous run, in their latest state: each run
+  # is pinned to the latest commit present when it starts, and that commit is recorded in
+  # checkpoint_location once every sink has written (a failed run reads the same commits
+  # again; a preview records nothing). Other query types: snapshot (the whole table,
+  # optionally as_of_instant for time travel) and read_optimized (merge-on-read base files
+  # only). incremental_format: cdc gives one row per change (op, ts_ms, before, after as
+  # structs) for tables written with hoodie.table.cdc.enabled, deletes included.
+  - id: orders_changes
+    type: hudi
+    connection: lake
+    options:
+      table: sales.orders                              # <- /tmp/tributary/hudi/sales/orders
+      query_type: incremental
+      begin_instant: "${env.since}"                    # the first run only
+      checkpoint_location: /tmp/tributary/checkpoints/orders_changes
+      include_metadata_columns: true                   # keep _hoodie_commit_time on the rows
+
+transforms:
+  - id: orders_enriched
+    type: sql
+    inputs: [{ node: orders_changes, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, country, order_ts,
+               _hoodie_commit_time AS committed_at
+        FROM orders
+        WHERE country <> 'XX'                          -- a filter on the partition column prunes partitions
+
+quality:
+  - id: orders_dq
+    attach_to: orders_enriched
+    action: observe
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_enriched
+    options:
+      path: "${env.out}/orders_changes"
+      format: parquet
+      mode: overwrite
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

@@ -1,0 +1,81 @@
+# Batch: Apache Iceberg table -> SQL -> Parquet files, with the catalog coming from a connection.
+# Reads the table that examples/csv_to_iceberg.yaml writes, so run that one first:
+#   tributary run examples/csv_to_iceberg.yaml
+#   tributary preview examples/iceberg_to_parquet.yaml --node orders_src
+#   tributary run examples/iceberg_to_parquet.yaml
+#
+# The source reads the table as it is now. Pick another point in time with one of
+# snapshot_id, as_of_timestamp, branch or tag; read only what was appended after a snapshot
+# with start_snapshot_id (and end_snapshot_id). The ids come from the table's metadata
+# (metadata_table: snapshots, or SELECT snapshot_id, committed_at FROM lake.sales.orders.snapshots).
+#   tributary plan examples/iceberg_to_parquet.yaml --explain   # what reaches Iceberg's scan
+# In the UI, drop "Apache Iceberg" from Sources onto the canvas and pick the `iceberg`
+# connection; the same connection serves the Iceberg sink. docs/iceberg-source.md has the details.
+version: 1
+pipeline:
+  id: iceberg_to_parquet
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      out: /tmp/tributary/out
+    connections:
+      lake:
+        type: iceberg
+        catalog_type: hadoop
+        warehouse: /tmp/tributary/warehouse
+        catalog_name: lake
+
+sources:
+  - id: orders_src
+    type: iceberg
+    connection: lake
+    options:
+      table: sales.orders
+      # filter: "country = 'IN'"                # pushed down: Iceberg skips other partitions/files
+      # columns: [order_id, amount, country]    # column pruning
+      # snapshot_id: "1234567890123456789"      # time travel: this snapshot
+      # as_of_timestamp: 2024-05-01T00:00:00Z   # ...or the snapshot current at this time
+      # start_snapshot_id: "1234567890123456789"  # incremental: rows appended after this snapshot
+      # metadata_table: snapshots               # list the snapshots instead (ids for the options above)
+
+  - id: revenue_src
+    type: iceberg
+    connection: lake
+    options:
+      table: sales.revenue_by_country
+
+transforms:
+  - id: big_orders
+    type: sql
+    inputs: [{ node: orders_src, as: orders }, { node: revenue_src, as: revenue }]
+    options:
+      sql: |
+        SELECT o.order_id, o.customer_id, o.amount, o.country, o.order_ts,
+               round(o.amount / r.revenue * 100, 1) AS pct_of_country_revenue
+        FROM orders o
+        JOIN revenue r ON r.country = o.country
+        WHERE o.amount >= 20
+
+quality:
+  - id: big_orders_dq
+    attach_to: big_orders
+    action: fail
+    checks:
+      - { type: unique, columns: [order_id] }
+      - { type: range, column: pct_of_country_revenue, min: 0, max: 100 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  - id: big_orders_out
+    type: file
+    input: big_orders
+    options:
+      path: "${env.out}/big_orders"
+      format: parquet
+      mode: overwrite
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

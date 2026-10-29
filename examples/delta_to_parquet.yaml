@@ -1,0 +1,53 @@
+# Batch: a Delta Lake table -> SQL -> Parquet, with time travel at hand.
+# Reads the table csv_to_delta.yaml writes, so run that one first. Then, from the repository root:
+#   tributary preview examples/delta_to_parquet.yaml --node orders_src
+#   tributary run examples/delta_to_parquet.yaml
+#
+# The table carries its own schema, so the source needs none: the editor and `validate --deep`
+# read the columns from the table's log. Declaring one (schema: { kind: ddl, ... }) turns it
+# into a contract instead: those columns, cast to those types, and the pipeline can be drawn
+# before the table exists.
+version: 1
+pipeline:
+  id: delta_to_parquet
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      lake_dir: /tmp/tributary/lake
+      out_dir: /tmp/tributary/delta_to_parquet
+
+sources:
+  - id: orders_src
+    type: delta
+    options:
+      path: "${env.lake_dir}/orders"
+      # version: 0                  # time travel: the table as it was at a version...
+      # timestamp: "2026-10-01"     # ...or at a time (batch reads only)
+      # use_dummy_data: true        # pretend: produce dummy_data (up to 100 records) and never read the table,
+      # dummy_data:                 # to draw and test the pipeline before the table exists
+      #   - { order_id: 1, customer_id: 100, amount: 25.5, country: IN, order_ts: "2026-10-01 10:00:00" }
+      #   - { order_id: 2, customer_id: 101, amount: 99.99, country: US, order_ts: "2026-10-01 11:30:00" }
+
+transforms:
+  - id: customer_totals
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT customer_id, country, count(*) AS orders, round(sum(amount), 2) AS total
+        FROM orders
+        GROUP BY customer_id, country
+
+sinks:
+  - id: totals_out
+    type: file
+    input: customer_totals
+    options:
+      path: "${env.out_dir}/customer_totals"
+      format: parquet
+      mode: overwrite
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

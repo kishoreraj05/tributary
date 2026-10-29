@@ -1,0 +1,103 @@
+# Batch: an Elasticsearch index -> SQL clean-up -> quality gate (quarantine) -> MongoDB.
+# Start the services and load the sample orders into the index:
+#   docker compose -f deploy/docker-compose.yml up -d elasticsearch mongodb
+#   deploy/seed_elasticsearch.sh
+# Then, from the repository root:
+#   tributary preview examples/elasticsearch_to_mongodb.yaml --node orders_clean
+#   tributary run examples/elasticsearch_to_mongodb.yaml
+# In the UI, import this file; the two connections below can also be created on the
+# Connections page instead (same names), with the password stored encrypted.
+version: 1
+pipeline:
+  id: orders_search_to_mongo
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      out_dir: /tmp/tributary/orders_search_to_mongo
+    connections:
+      es_main: { type: elasticsearch, nodes: "localhost:9200" }
+      mongo_main: { type: mongodb, connection_uri: "mongodb://localhost:27017" }
+  prod:
+    vars:
+      out_dir: s3a://my-bucket/orders_search_to_mongo
+    connections:
+      es_main:
+        type: elasticsearch
+        nodes: "${secret:es/prod/nodes}"
+        user: elastic
+        password: "${secret:es/prod/password}"
+        ssl: true
+      mongo_main:
+        type: mongodb
+        connection_uri: "${secret:mongo/prod/uri}"
+        username: tributary
+        password: "${secret:mongo/prod/password}"
+
+sources:
+  - id: orders_src
+    type: elasticsearch
+    connection: es_main
+    options:
+      index: orders
+      query: '{"query": {"range": {"order_ts": {"gte": "2026-10-01"}}}}'
+      include_metadata: true            # _metadata._id is the document id
+    # Without a schema block the columns come from the index mapping (order_id, customer_id,
+    # amount, country, order_ts). Declaring one skips the mapping lookup and fixes the types.
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT _metadata['_id'] AS doc_id, order_id, customer_id, amount,
+               upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_dq
+    attach_to: orders_clean
+    action: quarantine
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+      - { type: expression, expr: "length(country) = 2" }
+    results_sinks:
+      - { type: console }
+    quarantine_sink:
+      type: mongodb
+      connection: mongo_main
+      options: { database: tributary, collection: orders_quarantine, mode: overwrite }
+
+sinks:
+  - id: orders_out
+    type: mongodb
+    connection: mongo_main
+    input: orders_clean
+    options:
+      database: tributary
+      collection: orders
+      mode: upsert                      # re-runs update the same documents
+      merge_keys: [doc_id]
+  - id: revenue_out
+    type: mongodb
+    connection: mongo_main
+    input: revenue_by_country
+    options: { database: tributary, collection: revenue_by_country, mode: overwrite }
+  - id: revenue_console
+    type: console
+    input: revenue_by_country
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

@@ -1,0 +1,89 @@
+# Batch: students.csv -> one REST call per student (DataFrame-driven enrichment) -> Parquet.
+# The configuration of the REST source specification's sample, as a Tributary pipeline: the
+# enrichment step is a transform, so the DataFrame that drives the calls is simply its input.
+# Run from the repository root:
+#   tributary preview examples/rest_api_enrichment.yaml --node grades
+#   tributary run examples/rest_api_enrichment.yaml
+# The university API is fictional, so useDummyData is on: every call "returns" dummyData.
+# Point the connection at a real API and set useDummyData: false.
+version: 1
+pipeline:
+  id: student_grades
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      out_dir: /tmp/tributary/student_grades
+    connections:
+      university_api:                            # connections work for REST transforms too
+        type: rest_api
+        baseUrl: https://api.university.edu/v1
+        authType: bearer
+        token: "${secret:UNIVERSITY_API_TOKEN}"  # TRIBUTARY_SECRET_UNIVERSITY_API_TOKEN, resolved when running
+
+sources:
+  - id: student_enrollment_df
+    type: file
+    options:
+      path: "${env.data_dir}/students.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "student_roll_num INT, name STRING, dept STRING"
+
+transforms:
+  - id: grades
+    type: rest_api_enrichment
+    connection: university_api
+    inputs: [student_enrollment_df]
+    options:
+      endpoint:
+        url: "/students/{roll_no}/grades"       # relative to the connection's baseUrl
+        method: GET
+      dynamicInput:
+        inputStrategy: DataFrameDriven
+        inputDataFrameRef: student_enrollment_df
+        parameterMapping:
+          pathParams: { roll_no: student_roll_num }   # URL placeholder -> input column
+          # queryParams: { student_id: student_roll_num }       -> ?student_id=1
+          # bodyTemplate: { request_id: "${student_roll_num}", action: fetch }   (POST/PUT)
+        bulkRequestSupport: false
+        # bulkRequestSupport: true, bulkBatchSize: 50, bulkResponseMatch: { responseField: roll_no, inputColumn: student_roll_num }
+        onError: fail                            # or null: keep the row with empty record columns
+      parsing:
+        responseType: JSONObject                 # {"status": 200, "data": {"semesters": [...]}}
+        recordExtractionPath: "$.data.semesters"
+        explodeArray: true                       # one row per semester, next to the student's columns
+        recordSchema: "semester INT, gpa DOUBLE" # optional; inferred from the responses when omitted
+      concurrency:
+        maxConcurrentCalls: 10                   # the input is repartitioned into 10 tasks
+        rateLimitPerExecutor: 5                  # each task makes at most 5 calls per second
+        connectionPoolSize: 2
+      useDummyData: true
+      dummyData:
+        - { semester: 1, gpa: 3.4 }
+        - { semester: 2, gpa: 3.6 }
+
+  - id: gpa_by_dept
+    type: sql
+    inputs: [grades]
+    options:
+      sql: |
+        SELECT dept, round(avg(gpa), 2) AS avg_gpa, count(DISTINCT student_roll_num) AS students
+        FROM grades
+        GROUP BY dept
+
+sinks:
+  - id: grades_out
+    type: file
+    input: grades
+    options: { path: "${env.out_dir}/grades", format: parquet, mode: overwrite }
+  - id: gpa_console
+    type: console
+    input: gpa_by_dept
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

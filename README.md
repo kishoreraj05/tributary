@@ -21,6 +21,7 @@ You draw a pipeline as sources → transforms → sinks, with data-quality gates
 
   ![A finished run with its data-quality results](docs/images/runs.png)
 
+- **Lakehouse and operational connectors.** Read from and write to files, Kafka (source), Apache Iceberg, Delta Lake, Apache Hudi, Elasticsearch, MongoDB and REST APIs (source and per-row enrichment), and profile or verify data with an [Amazon Deequ](https://github.com/awslabs/deequ) node. Sources can stand in with pasted dummy data, so a pipeline can be drawn and tested before the real system is reachable. See [`engine/README.md`](engine/README.md) for each connector and [`examples/`](examples/) for a pipeline per connector.
 - **One engine, many places.** The same spec runs from the CLI, the API or the UI: batch or streaming, locally or on a cluster, with Spark resources sized automatically.
 
 | Component | Status |
@@ -48,10 +49,10 @@ engine/.venv/bin/tributary preview examples/csv_to_parquet.yaml --node orders_cl
 engine/.venv/bin/tributary run examples/csv_to_parquet.yaml
 ```
 
-Requires Java 8/11/17 and Python 3.10–3.12, which is what PySpark 3.5 supports.
+Requires Java 8/11/17 and Python 3.10–3.12, which is what PySpark 3.5 supports. The Iceberg runtime defaults to 1.6.1 for the same reason (newer releases need Java 11+; pick one with `TRIBUTARY_ICEBERG_VERSION`).
 
-For Kafka, Postgres, MinIO and the Prometheus Pushgateway:
-`docker compose -f deploy/docker-compose.yml up -d`, then see [`examples/kafka_to_parquet.yaml`](examples/kafka_to_parquet.yaml).
+For Kafka, Postgres, MongoDB, MinIO and the Prometheus Pushgateway:
+`docker compose -f deploy/docker-compose.yml up -d`, then see [`examples/kafka_to_parquet.yaml`](examples/kafka_to_parquet.yaml). Elasticsearch and a mock REST API are opt-in: `up -d elasticsearch mock-api`. Connector guides: [MongoDB](docs/mongodb.md), [Elasticsearch](docs/ES_AS_A_SOURCE.md), [Delta](docs/DELTA_AS_A_SOURCE.md), [Hudi](docs/HUDI_AS_A_SOURCE.md), [Iceberg](docs/iceberg-source.md), [REST](docs/REST_AS_A_SOURCE.md).
 
 ## A pipeline
 

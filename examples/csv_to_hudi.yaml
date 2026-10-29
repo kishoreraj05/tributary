@@ -1,0 +1,93 @@
+# Batch: CSV orders -> SQL -> quality gate (drop) -> Apache Hudi tables on local disk.
+# Run from the repository root (the first run downloads the Hudi Spark bundle):
+#   tributary plan examples/csv_to_hudi.yaml
+#   tributary preview examples/csv_to_hudi.yaml --node orders_upsert
+#   tributary run examples/csv_to_hudi.yaml           # run it twice: the upsert stays at 6 rows
+#
+# The storage root (and, in other environments, the metastore to sync with) comes from a
+# connection, so the same pipeline can point at S3 and a Hive metastore or Glue without
+# touching the sinks. In the UI, create a connection of type `hudi` with the same fields.
+# The tables written here are read back by hudi_to_parquet.yaml through the same connection.
+version: 1
+pipeline:
+  id: orders_to_hudi
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+    connections:
+      lake:
+        type: hudi
+        base_path: /tmp/tributary/hudi                 # or s3a://bucket/lake, gs://..., abfss://...
+        # catalog_sync: hms                            # register tables in a Hive metastore after each write
+        # catalog_uri: thrift://metastore:9083         # (glue: catalog_sync: glue, no uri)
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders, current_timestamp() AS computed_at
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean
+    action: drop                                       # Hudi refuses rows whose record key is null
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  # Upsert: re-running the pipeline updates existing orders instead of duplicating them;
+  # for a given order, the row with the latest order_ts wins.
+  - id: orders_upsert
+    type: hudi
+    input: orders_clean
+    connection: lake
+    options:
+      table: sales.orders                              # -> /tmp/tributary/hudi/sales/orders
+      operation: upsert
+      record_key: [order_id]
+      precombine_field: order_ts
+      partition_by: [country]
+      table_type: copy_on_write                        # or merge_on_read for write-heavy tables
+
+  # Replace the partitions present in this run's data, keep the others.
+  - id: revenue_out
+    type: hudi
+    input: revenue_by_country
+    connection: lake
+    options:
+      table: sales.revenue_by_country
+      operation: insert_overwrite
+      record_key: [country]
+      partition_by: [country]
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

@@ -1,0 +1,56 @@
+# Streaming, Delta to Delta: the change data feed of one table keeps another one current.
+# Every insert, update and delete csv_to_delta.yaml makes to its orders table (created with
+# delta.enableChangeDataFeed on) is applied to a mirror table, one commit per micro-batch.
+# Run csv_to_delta.yaml first, then, from the repository root:
+#   tributary preview examples/delta_changes_to_delta.yaml --node orders_changes   # the last commit's changes
+#   tributary run examples/delta_changes_to_delta.yaml
+# trigger available_now processes the changes so far and stops; edit examples/data/orders.csv,
+# run csv_to_delta.yaml again and this pipeline again: only the new changes are processed (the
+# checkpoint remembers). Drop the trigger (processing_time) to keep it running.
+#
+# Several commits can land in one micro-batch, so the SQL keeps the last change of each key
+# before the merge; the sink deletes a row when its last change is a delete.
+version: 1
+pipeline:
+  id: orders_changes_to_mirror
+  mode: streaming
+  streaming:
+    checkpoint_location: /tmp/tributary/orders_changes_to_mirror/_checkpoint
+    trigger: available_now
+
+environments:
+  dev:
+    vars:
+      lake_dir: /tmp/tributary/lake
+
+sources:
+  - id: orders_changes
+    type: delta
+    options:
+      path: "${env.lake_dir}/orders"
+      change_feed: true             # rows are changes: _change_type, _commit_version, _commit_timestamp
+      starting_version: 0           # from the first commit; 'latest' = only commits after the query starts
+
+transforms:
+  - id: last_change_per_order
+    type: sql
+    inputs: [{ node: orders_changes, as: changes }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, country, order_ts, _change_type
+        FROM (
+          SELECT *, row_number() OVER (PARTITION BY order_id ORDER BY _commit_version DESC) AS rn
+          FROM changes
+          WHERE _change_type <> 'update_preimage'     -- the row before an update: not needed
+        )
+        WHERE rn = 1
+
+sinks:
+  - id: orders_mirror
+    type: delta
+    input: last_change_per_order
+    options:
+      path: "${env.lake_dir}/orders_mirror"
+      mode: merge
+      merge_keys: [order_id]
+      delete_condition: "s._change_type = 'delete'"
