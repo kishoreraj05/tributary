@@ -37,7 +37,7 @@ export function NodePanel({ node }: { node: FlowNode }) {
     <div key={node.id}>
       <div className="panel-head">
         <IconChip
-          icon={pluginIcon(kind === "quality" ? undefined : plugin(catalog, kind as Category, type)?.icon, kind)}
+          icon={pluginIcon(kind === "quality" ? undefined : plugin(catalog, kind as Category, type)?.icon, kind, type)}
           color={`var(--${kind})`}
           size={18}
           large

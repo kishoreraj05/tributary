@@ -107,7 +107,7 @@ export function Palette({ catalog, width, onResize, onCollapse }: { catalog: Cat
               <div className="tile-grid">
                 {items.map((p) => {
                   const unsupported = kind === "source" && mode === "streaming" && !p.capabilities.includes("streaming");
-                  const Icon = pluginIcon(p.icon, kind);
+                  const Icon = pluginIcon(p.icon, kind, p.type);
                   return (
                     <div
                       key={p.type}
@@ -157,7 +157,7 @@ function DetailsCard({ hover, catalog }: { hover: Hover; catalog: Catalog }) {
     setTop(Math.max(8, Math.min(rect.top - 6, window.innerHeight - height - 8)));
   }, [rect]);
 
-  const Icon = pluginIcon(item.icon, kind);
+  const Icon = pluginIcon(item.icon, kind, item.type);
   const required = item.options_schema.required ?? [];
   const caps = item.capabilities.filter((c) => c === "batch" || c === "streaming");
   const checks = kind === "quality" ? catalog.components.check.map((c) => c.type) : [];

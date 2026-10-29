@@ -565,3 +565,7 @@ body.resizing-rows * { cursor: row-resize !important; }
 }
 
 table.grid tr.failing td { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+
+/* official marks (components/brands.tsx) keep their own colours */
+.brand { flex: none; display: block; }
+img.brand { object-fit: contain; border-radius: 22%; }

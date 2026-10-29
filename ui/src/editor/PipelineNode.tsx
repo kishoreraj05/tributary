@@ -36,7 +36,7 @@ export function PipelineNode({ data, selected }: NodeProps<FlowNode>) {
         <span className="badge"><CircleAlert size={11} strokeWidth={2.6} />{issues.length}</span>
       )}
       <div className="row">
-        <IconChip icon={pluginIcon(meta?.icon, data.kind)} color={`var(--${data.kind})`} />
+        <IconChip icon={pluginIcon(meta?.icon, data.kind, data.type)} color={`var(--${data.kind})`} />
         <div className="text">
           <div className="title">{data.specId}</div>
           <div className="subtitle">{subtitle}</div>
