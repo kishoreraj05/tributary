@@ -7,11 +7,13 @@ import os
 import sys
 import traceback
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select, update
 
 from tributary import api
-from tributary.errors import QualityFailure
+from tributary.core import target_fields
+from tributary.errors import PluginError, QualityFailure, short_error
 from tributary.registry import Registry
 from tributary.runtime import create_session, decide_resources
 
@@ -19,6 +21,17 @@ from .db import session_factory
 from .models import Connection, PipelineVersion, Run
 from .quality_sink import BackendMetricsSink
 from .services.specs import materialize
+
+
+def metrics_target_fields(registry: Registry, node: Any) -> list[str]:
+    """Option fields of a transform node that hold metrics sinks (see tributary.core.targets)."""
+    if not isinstance(node, dict) or not isinstance(node.get("type"), str):
+        return []
+    try:
+        plugin = registry.get("transform", node["type"])
+    except PluginError:
+        return []  # reported when the spec is compiled
+    return [name for name, category in target_fields(plugin.Options).items() if category == "metrics_sink"]
 
 
 def _update(run_id: str, *, expect: tuple[str, ...], **values) -> bool:
@@ -46,10 +59,14 @@ def main(run_id: str) -> int:
         doc, env = materialize(version.spec, run.env, session.scalars(select(Connection)).all(), reveal=True)
         version_no = run.version
 
-    for block in doc.get("quality") or []:
-        block.setdefault("results_sinks", []).append({"type": BackendMetricsSink.type_name})
     registry = Registry()
     registry.register(BackendMetricsSink)
+    for block in doc.get("quality") or []:
+        block.setdefault("results_sinks", []).append({"type": BackendMetricsSink.type_name})
+    for node in doc.get("transforms") or []:
+        # Nodes that evaluate checks of their own (deequ) embed metrics targets in their options.
+        for field_name in metrics_target_fields(registry, node):
+            node.setdefault("options", {}).setdefault(field_name, []).append({"type": BackendMetricsSink.type_name})
 
     now = datetime.now(timezone.utc)
     if not _update(run_id, expect=("queued",), status="running", started_at=now, pid=os.getpid()):
@@ -80,8 +97,7 @@ def main(run_id: str) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001 - every failure must be recorded
         traceback.print_exc()
-        message = (str(exc).strip() or type(exc).__name__).splitlines()[0][:1000]
-        _update(run_id, expect=("running",), status="failed", finished_at=datetime.now(timezone.utc), error=message)
+        _update(run_id, expect=("running",), status="failed", finished_at=datetime.now(timezone.utc), error=short_error(exc))
         return 1
 
 

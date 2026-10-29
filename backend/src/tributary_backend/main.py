@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from tributary.errors import TributaryError
 
@@ -54,7 +55,28 @@ def create_app() -> FastAPI:
 
     for module in (components, pipelines, connections, design, runs):
         app.include_router(module.router, prefix="/api/v1")
+    if settings.ui_dir:
+        _serve_ui(app, settings.ui_dir)
     return app
+
+
+def _serve_ui(app: FastAPI, ui_dir) -> None:
+    """Serves a built UI: its assets as files, every other path as index.html (the UI is a
+    single-page app that routes /pipelines/<id> and /connections itself)."""
+    index = ui_dir / "index.html"
+    if not index.is_file():
+        raise RuntimeError(f"TRIBUTARY_UI_DIR={ui_dir} has no index.html (build the UI with 'npm run build' first)")
+    if (ui_dir / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=ui_dir / "assets"), name="ui-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def ui(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(404)
+        candidate = (ui_dir / path).resolve() if path else index
+        if path and candidate.is_file() and ui_dir.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(index)
 
 
 app = create_app()

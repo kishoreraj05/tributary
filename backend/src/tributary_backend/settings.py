@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     preview_max_rows: int = 500
 
     cors_origins: list[str] = ["http://localhost:5173"]
+    # A built UI (ui/dist) to serve at / next to the API, as the Docker image does. Unset in
+    # development, where the Vite dev server serves the UI and proxies /api here.
+    ui_dir: Path | None = None
 
     @property
     def logs_dir(self) -> Path:

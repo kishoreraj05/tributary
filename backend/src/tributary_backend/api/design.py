@@ -11,10 +11,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from tributary import compile_pipeline
-from tributary.errors import SpecError, TributaryError
+from tributary.errors import SpecError, SpecIssue, TributaryError, short_error
 from tributary.execution import analyze_pipeline, preview_node
 from tributary.planner import build_plan
 from tributary.runtime import decide_resources
+from tributary.spec import restrict_to
 
 from ..db import get_session
 from ..schemas import PreviewRequest, SampleOut, SpecRequest, ValidateRequest
@@ -36,8 +37,7 @@ def _compile(session: Session, body: SpecRequest, *, reveal: bool):
 
 
 def _spark_error(exc: Exception) -> HTTPException:
-    text = (str(exc).strip() or type(exc).__name__).splitlines()[0][:1000]
-    return HTTPException(400, {"message": text})
+    return HTTPException(400, {"message": short_error(exc)})
 
 
 @router.post("/validate")
@@ -53,6 +53,11 @@ def validate(body: ValidateRequest, session: Session = Depends(get_session)) -> 
     if body.deep:
         nodes = analyze_pipeline(compiled, get_spark())
         result["nodes"] = {k: vars(v) for k, v in nodes.items()}
+        # What a sink found wrong with its options for the data it would get (a merge key
+        # the upstream SQL does not produce, say) is reported like a compile issue: by spec
+        # path, so the editor shows it under that field.
+        for node in nodes.values():
+            result["issues"] += [issue_dict(SpecIssue(i["path"], i["message"]), body.spec) for i in node.issues]
         result["valid"] = all(v.ok for v in nodes.values())
     return result
 
@@ -92,11 +97,16 @@ def plan(body: SpecRequest, session: Session = Depends(get_session)) -> dict[str
 
 @router.post("/preview")
 def preview(body: PreviewRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Tests one node. Only the node and its upstream (plus the quality blocks attached to
+    them) are compiled, so an unfinished node elsewhere on the canvas does not block it."""
+    body = body.model_copy(update={"spec": restrict_to(body.spec, body.node_id)})
     compiled = _compile(session, body, reveal=True)
-    samples = {source: str(_sample_path(sample_id)) for source, sample_id in body.sample_data.items()}
+    kept = {s.id for s in compiled.spec.sources}
+    samples = {source: str(_sample_path(sample_id)) for source, sample_id in body.sample_data.items() if source in kept}
     limit = min(body.limit, get_settings().preview_max_rows)
     try:
-        result = preview_node(compiled, body.node_id, get_spark(), limit=limit, sample_data=samples, write_sinks=body.write)
+        result = preview_node(compiled, body.node_id, get_spark(), limit=limit, sample_data=samples, write_sinks=body.write,
+                              explain=body.explain)
     except TributaryError as exc:
         raise HTTPException(400, {"message": str(exc)}) from None
     except Exception as exc:  # noqa: BLE001 - Spark analysis/runtime errors go back to the editor

@@ -105,6 +105,7 @@ class PreviewRequest(SpecRequest):
     limit: int = Field(20, ge=1)
     sample_data: dict[str, str] = Field(default_factory=dict, description="{source_id: sample_id}")
     write: bool = Field(False, description="For sinks: actually write the sample")
+    explain: bool = Field(False, description="Also return Spark's physical plan for the node")
 
 
 class SampleOut(BaseModel):

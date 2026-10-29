@@ -29,9 +29,15 @@ def referenced_connections(spec: dict[str, Any]) -> list[str]:
         if isinstance(node, dict) and isinstance(node.get("connection"), str) and node["connection"] not in names:
             names.append(node["connection"])
 
-    for key in ("sources", "sinks"):
+    for key in ("sources", "transforms", "sinks"):
         for node in spec.get(key) or []:
             add(node)
+            options = node.get("options") if isinstance(node, dict) else None
+            if isinstance(options, dict):
+                # Targets embedded in the node's options (a deequ node's results_sinks).
+                for value in options.values():
+                    for target in value if isinstance(value, list) else ():
+                        add(target)
     for block in spec.get("quality") or []:
         if isinstance(block, dict):
             for target in block.get("results_sinks") or []:
