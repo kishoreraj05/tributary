@@ -45,7 +45,11 @@ def compile_pipeline(
     *,
     registry: Registry | None = None,
     resolve_secrets: bool = False,
+    use_dummies: bool | None = None,
 ) -> CompiledPipeline:
+    """``use_dummies``: whether nodes with ``dummy.enabled`` become the dummy plugins. By
+    default only in the local environment; True does it in any environment, which checks
+    everything else about a pipeline whose dummy nodes have no real settings yet."""
     if isinstance(source, CompiledPipeline):
         return source
     registry = registry or default_registry()
@@ -57,7 +61,7 @@ def compile_pipeline(
         raise SpecError(issues)
 
     warnings: list[str] = []
-    _apply_dummies(doc, env_name, issues, warnings)
+    _apply_dummies(doc, env_name, issues, warnings, env_name == LOCAL_ENV if use_dummies is None else use_dummies)
     secrets = SecretResolver(registry) if resolve_secrets else None
     variables = Interpolator({}, secrets, issues).resolve(env_spec.vars, f"environments.{env_name}.vars")
     _merge_connections(doc, env_spec.connections, registry, issues)
@@ -81,7 +85,7 @@ def compile_pipeline(
     return CompiledPipeline(spec=spec, env=env_name, registry=registry, warnings=warnings)
 
 
-def _apply_dummies(doc: dict[str, Any], env: str, issues: list[SpecIssue], warnings: list[str]) -> None:
+def _apply_dummies(doc: dict[str, Any], env: str, issues: list[SpecIssue], warnings: list[str], swap: bool) -> None:
     """In the local environment, a source or sink with ``dummy.enabled`` becomes the dummy
     plugin of its category, so its own options (and connection) are neither needed nor
     checked: the source hands its uploaded records downstream, the sink writes nothing.
@@ -90,7 +94,7 @@ def _apply_dummies(doc: dict[str, Any], env: str, issues: list[SpecIssue], warni
         for i, node in enumerate(doc.get(key) or []):
             if not isinstance(node, dict) or not isinstance(node.get("dummy"), dict) or not node["dummy"].get("enabled"):
                 continue
-            if env != LOCAL_ENV:
+            if not swap:
                 warnings.append(f"{key}[{i}] ({node.get('id')}): dummy data is only used in the '{LOCAL_ENV}' environment")
                 continue
             options: dict[str, Any] = {"stands_for": node.get("type") or ""}

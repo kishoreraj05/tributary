@@ -55,6 +55,8 @@ export interface VersionSummary {
   version: number;
   message: string | null;
   created_at: string;
+  /** Returned when a version is created: settings still missing on dummy nodes outside local. */
+  warnings?: string[];
 }
 
 export interface Version extends VersionSummary {

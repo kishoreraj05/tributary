@@ -148,3 +148,20 @@ def test_a_streaming_pipeline_reads_the_dummy_records_as_one_micro_batch(spark, 
     doc["sinks"] = [{"id": "orders_file", "type": "file", "input": "orders_clean", "options": {"path": str(tmp_path / "out"), "format": "json"}}]
     run(doc, env="local", spark=spark)
     assert sorted(r.order_id for r in spark.read.json(str(tmp_path / "out")).collect()) == [1, 3]
+
+
+def test_use_dummies_checks_everything_but_the_dummy_nodes_in_any_environment():
+    """What saving a version relies on: in prod the dummy nodes lack their real settings,
+    but with use_dummies the rest of the pipeline is still checked."""
+    with pytest.raises(SpecError):
+        compile_pipeline(pipeline(), env="prod")
+    compiled = compile_pipeline(pipeline(), env="prod", use_dummies=True)
+    assert [s.type for s in compiled.spec.sources] == ["dummy"] and compiled.warnings == []
+    broken = pipeline()
+    broken["transforms"][0]["inputs"] = [{"node": "missing"}]
+    with pytest.raises(SpecError) as error:
+        compile_pipeline(broken, env="prod", use_dummies=True)
+    assert error.value.issues and all(i.path.startswith("transforms[0]") for i in error.value.issues)
+    # And use_dummies=False keeps a local pipeline's nodes real.
+    with pytest.raises(SpecError):
+        compile_pipeline(pipeline(), env="local", use_dummies=False)

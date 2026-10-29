@@ -179,10 +179,11 @@ engine/.venv/bin/tributary run pipeline.yaml -e dev                           # 
 - **Sinks** write nothing. Preview shows their input; a run logs `dummy <type> sink: N rows not written`. Real sinks
   in the same pipeline still write as usual, so a dummy source can feed a real local MongoDB from Option A.
 - **Limits:** 1,000 records per source; every line must be a JSON object.
-- **Saving a version.** A version must be valid in *every* environment the pipeline defines. A pipeline whose nodes
-  only work as dummies can be previewed (and run from the CLI with `-e local`) right away. To save a version, which
-  runs started from the UI need, first fill in the real settings for its other environments, or remove those
-  environments until you're ready for them.
+- **Saving a version.** A version is checked in every environment the pipeline defines. Dummy nodes are the
+  exception: if their real settings are still missing in another environment (say `dev`), the version is saved
+  anyway, and the editor says which environments still need them. Running there fails until they're filled in;
+  running in `local` works right away. Any other problem still blocks the save, with its environment shown
+  (`[dev] orders: ...`).
 - **Dummy data vs. sample data.** The *Sample data* upload on a source only replaces what Previews read, works in any
   environment, and isn't saved in the pipeline. Dummy data is part of the pipeline, works for runs too, and only
   in `local`.
