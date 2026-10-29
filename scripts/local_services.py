@@ -109,7 +109,10 @@ def compose(*args: str, check: bool = True, dry_run: bool = False) -> subprocess
     if dry_run:
         print("would run:", " ".join(cmd))
         return None
-    return subprocess.run(cmd, check=check)
+    result = subprocess.run(cmd, check=False)
+    if check and result.returncode != 0:
+        sys.exit(f"docker compose failed (exit {result.returncode}); its output is above. Command: {' '.join(cmd)}")
+    return result
 
 
 def pipeline_types(path: Path) -> list[str]:
