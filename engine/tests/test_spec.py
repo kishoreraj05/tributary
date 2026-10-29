@@ -11,7 +11,10 @@ def messages(exc: SpecError) -> str:
 
 
 @pytest.mark.parametrize("name,env", [("csv_to_parquet.yaml", None), ("kafka_to_parquet.yaml", "dev"),
-                                      ("kafka_to_parquet.yaml", "prod"), ("file_stream_to_parquet.yaml", None)])
+                                      ("kafka_to_parquet.yaml", "prod"), ("file_stream_to_parquet.yaml", None),
+                                      ("csv_to_delta.yaml", None), ("file_stream_to_delta.yaml", None),
+                                      ("rest_api_to_parquet.yaml", None), ("rest_api_enrichment.yaml", None),
+                                      ("rest_api_local_test.yaml", None), ("rest_api_enrichment_local_test.yaml", None)])
 def test_examples_compile(name, env):
     compiled = compile_pipeline(EXAMPLES / name, env)
     assert compiled.spec.sinks
@@ -131,3 +134,34 @@ def test_error_paths_omit_union_tags(tmp_path, orders_csv):
         compile_pipeline(doc)
     paths = {i.path for i in err.value.issues}
     assert {"sources[0].options.paht", "sources[0].schema.ddl"} <= paths
+
+
+def test_short_error_surfaces_the_jvm_exception():
+    from tributary import short_error
+
+    py4j = Exception(
+        "An error occurred while calling o38.read.\n"
+        ": java.lang.UnsupportedClassVersionError: org/apache/iceberg/spark/ExtendedParser has been compiled "
+        "by a more recent version of the Java Runtime (class file version 55.0)\n"
+        "\tat java.lang.ClassLoader.defineClass1(Native Method)\n"
+    )
+    assert short_error(py4j).startswith("java.lang.UnsupportedClassVersionError: org/apache/iceberg/spark/ExtendedParser")
+    nested = Exception("An error occurred while calling o1.sql.\n: java.lang.ExceptionInInitializerError\n\tat x\nCaused by: java.io.IOException: disk full\n\tat y")
+    assert short_error(nested) == "java.lang.ExceptionInInitializerError (Caused by: java.io.IOException: disk full)"
+    assert short_error(ValueError("plain\nsecond line")) == "plain"
+    assert short_error(ValueError("")) == "ValueError"
+
+
+def test_unconnected_nodes_and_bad_names_say_what_to_fix(tmp_path, orders_csv):
+    """What the canvas sends for a node nobody is connected to, and for a bad id."""
+    doc = pipeline(tmp_path, orders_csv)
+    doc["sinks"][0]["input"] = ""
+    doc["transforms"][0]["inputs"] = []
+    doc["sources"][0]["id"] = "1st source"
+    with pytest.raises(SpecError) as err:
+        compile_pipeline(doc)
+    assert {(i.path, i.message) for i in err.value.issues} == {
+        ("sinks[0].input", "not connected: link a source or transform to this sink"),
+        ("transforms[0].inputs", "not connected: link at least one node to this transform"),
+        ("sources[0].id", "'1st source' is not a valid name: letters, digits and _ only, not starting with a digit"),
+    }

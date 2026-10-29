@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ROW_CHECKS, pipeline
-from tributary import QualityFailure, analyze, compile_pipeline, preview, run
+from tributary import QualityFailure, TributaryError, analyze, compile_pipeline, preview, run
 
 
 def quality(action, **extra):
@@ -91,6 +91,19 @@ def test_analyze_finds_bad_columns_without_data(spark, tmp_path, orders_csv):
     assert report["orders_src"].ok
     assert not report["orders_clean"].ok and "amout" in report["orders_clean"].error
     assert "skipped" in report["orders_out"].error
+
+
+def test_analyze_checks_the_columns_a_sink_names(spark, tmp_path, orders_csv):
+    doc = pipeline(tmp_path, orders_csv)
+    doc["sinks"][0]["options"]["partition_by"] = ["country", "region"]
+    report = analyze(compile_pipeline(doc), spark=spark)
+    assert not report["orders_out"].ok
+    assert report["orders_out"].issues == [
+        {"path": "sinks[0].options.partition_by", "message": "not in the data: region (columns: order_id, amount, country)"}
+    ]
+    with pytest.raises(TributaryError, match="file sink .*partition_by not in the data: region"):
+        run(doc, spark=spark)
+    assert not (tmp_path / "out").exists()
 
 
 def test_preview_renders_timestamps_in_session_time_zone(spark, tmp_path):
