@@ -129,3 +129,9 @@ See [`engine/README.md`](engine/README.md#how-it-works) for how it works, and [`
 The Delta, Iceberg and Hudi sinks are described in [`engine/README.md`](engine/README.md#how-it-works). For Kafka and files, start from [`examples/kafka_to_parquet.yaml`](examples/kafka_to_parquet.yaml) and [`examples/csv_to_parquet.yaml`](examples/csv_to_parquet.yaml).
 
 The screenshots above are generated: with the backend and UI running, `node scripts/capture-screenshots.mjs` recreates them (it needs Google Chrome).
+
+## License
+
+Tributary is free for **non-commercial use**: students, teaching, research and personal projects. It is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+**Commercial use needs permission.** Any use by or for a business needs a separate licence; see [`COMMERCIAL.md`](COMMERCIAL.md) for how to ask. Versions published before 29 October 2026 were Apache-2.0; see [`NOTICE`](NOTICE).
