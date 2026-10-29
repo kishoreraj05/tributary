@@ -25,7 +25,8 @@ export function PipelinesPage() {
       const p = await api.createPipeline(name, {
         version: 1,
         pipeline: { id: slug(name), mode: "batch" },
-        environments: { dev: { vars: {} } },
+        // local first, so a new pipeline opens there: sources and sinks can use dummy data in it.
+        environments: { local: { vars: {} }, dev: { vars: {} } },
         sources: [],
         sinks: [],
       });

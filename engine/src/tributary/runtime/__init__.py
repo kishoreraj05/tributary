@@ -1,4 +1,17 @@
 from .resources import PROFILES, ResourceDecision, decide_resources
-from .session import create_session, format_package, required_packages
+from .session import EXCLUDES_KEY, EXTENSIONS_KEY, LIST_KEYS, create_session, format_package, merge_extensions, required_conf, required_packages, session_conf
 
-__all__ = ["PROFILES", "ResourceDecision", "create_session", "decide_resources", "format_package", "required_packages"]
+__all__ = [
+    "EXCLUDES_KEY",
+    "EXTENSIONS_KEY",
+    "LIST_KEYS",
+    "PROFILES",
+    "ResourceDecision",
+    "create_session",
+    "decide_resources",
+    "format_package",
+    "merge_extensions",
+    "required_conf",
+    "required_packages",
+    "session_conf",
+]

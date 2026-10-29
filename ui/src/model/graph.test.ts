@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectionError,
+  countRecords,
   dataEdge,
   describeDiff,
   fromSpec,
+  isDummy,
   isSameSpec,
   prune,
   specDiff,
@@ -118,5 +120,36 @@ describe("draft vs version diff", () => {
     const { nodes, edges, meta } = fromSpec(SPEC, { out: { x: 1, y: 1 } });
     nodes.forEach((n) => (n.position = { x: n.position.x + 50, y: 0 }));
     expect(isSameSpec(specDiff(toSpec(nodes, edges, meta), SPEC))).toBe(true);
+  });
+});
+
+describe("dummy data (local environment)", () => {
+  const spec = {
+    version: 1,
+    pipeline: { id: "p" },
+    environments: { local: {}, dev: {} },
+    sources: [{ id: "orders", type: "mongodb", options: {}, dummy: { enabled: true, data: '{"a": 1}' } }],
+    transforms: [],
+    sinks: [{ id: "out", type: "elasticsearch", input: "orders", options: {}, dummy: { enabled: false } }],
+  };
+
+  it("keeps the dummy settings through the graph, also when switched off", () => {
+    const { nodes, edges, meta } = fromSpec(spec);
+    expect(toSpec(nodes, edges, meta)).toEqual(spec);
+  });
+
+  it("only counts as dummy in the local environment, on sources and sinks", () => {
+    const { nodes } = fromSpec(spec);
+    const [source, sink] = nodes;
+    expect(isDummy(source.data, "local")).toBe(true);
+    expect(isDummy(source.data, "dev")).toBe(false);
+    expect(isDummy(sink.data, "local")).toBe(false);
+  });
+
+  it("counts JSON Lines records and says what is wrong", () => {
+    expect(countRecords('{"a": 1}\n\n{"a": 2}\n')).toEqual({ count: 2 });
+    expect(countRecords('{"a": 1}\n{"a": ')).toEqual({ count: 1, error: "line 2 is not JSON" });
+    expect(countRecords("[1]")).toEqual({ count: 0, error: "line 1 is not a JSON object" });
+    expect(countRecords(Array(1001).fill('{"a": 1}').join("\n")).error).toBe("at most 1000 records (1001 given)");
   });
 });

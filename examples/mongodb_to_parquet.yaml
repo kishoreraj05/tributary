@@ -1,0 +1,68 @@
+# Batch: a MongoDB collection -> SQL -> Parquet + console. In the local environment the
+# source's dummy data stands in for the collection, so it runs without any MongoDB server
+# (nothing is downloaded either):
+#   tributary preview examples/mongodb_to_parquet.yaml -e local --node orders_mongo
+#   tributary run examples/mongodb_to_parquet.yaml -e local
+#
+# Any other environment ignores the dummy data and reads the collection in the options
+# (in the UI, a connection of type "mongodb" supplies connection_uri, username, password):
+#   tributary run examples/mongodb_to_parquet.yaml -e dev
+version: 1
+pipeline:
+  id: mongodb_orders
+  mode: batch
+
+environments:
+  local:
+    vars:
+      out_dir: /tmp/tributary/mongodb_orders
+  dev:
+    vars:
+      out_dir: /tmp/tributary/mongodb_orders
+
+sources:
+  - id: orders_mongo
+    type: mongodb
+    options:
+      connection_uri: mongodb://localhost:27017
+      database: tributary
+      collection: orders
+      # pipeline: '[{"$match": {"country": {"$in": ["in", "us"]}}}]'   # optional, runs on the server
+    dummy:
+      # Local environment only: JSON Lines, one document per line (up to 1000; the editor
+      # uploads a .jsonl file). Nested documents become structs (customer.tier below).
+      enabled: true
+      data: |
+        {"_id": "a1", "order_id": 1, "amount": 25.5, "country": "in", "order_ts": "2026-10-01T10:00:00Z", "customer": {"id": 100, "tier": "gold"}}
+        {"_id": "a2", "order_id": 2, "amount": 99.99, "country": "us", "order_ts": "2026-10-01T11:30:00Z", "customer": {"id": 101, "tier": "silver"}}
+        {"_id": "a3", "order_id": 3, "amount": 7.0, "country": "in", "order_ts": "2026-10-02T09:15:00Z", "customer": {"id": 100, "tier": "gold"}}
+        {"_id": "a4", "order_id": 4, "amount": 15.25, "country": "gb", "order_ts": "2026-10-02T13:20:00Z", "customer": {"id": 102, "tier": "bronze"}}
+    # Optional: without a schema the column types are inferred from the documents
+    # (order_ts would be a string); declaring one types them for the real collection too.
+    schema:
+      kind: ddl
+      ddl: "_id STRING, order_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP, customer STRUCT<id: INT, tier: STRING>"
+
+transforms:
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_mongo]
+    options:
+      sql: |
+        SELECT upper(country) AS country, customer.tier AS tier,
+               round(sum(amount), 2) AS revenue, count(*) AS orders, max(order_ts) AS last_order
+        FROM orders_mongo
+        GROUP BY country, customer.tier
+
+sinks:
+  - id: revenue_out
+    type: file
+    input: revenue_by_country
+    options: { path: "${env.out_dir}/revenue", format: parquet, mode: overwrite }
+  - id: revenue_console
+    type: console
+    input: revenue_by_country
+
+runtime:
+  local: { master: "local[*]", resources: auto }
+  dev: { master: "local[*]", resources: auto }

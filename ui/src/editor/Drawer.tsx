@@ -8,6 +8,7 @@ import type { PlanResult, QualityResult, Run } from "../api/types";
 import { monacoTheme } from "../components/monaco";
 import { toSpec } from "../model/graph";
 import { problemCount, useEditor, type DrawerTab } from "../store/editor";
+import { DRAWER, ResizeHandle, usePanelSize } from "./layout";
 
 const TABS: { id: DrawerTab; label: string; icon: LucideIcon }[] = [
   { id: "preview", label: "Preview", icon: Eye },
@@ -29,8 +30,10 @@ function Empty({ icon: Icon, children }: { icon: LucideIcon; children: React.Rea
 export function Drawer() {
   const { drawer, setDrawer, issues, analysis } = useEditor();
   const problems = problemCount({ issues, analysis });
+  const [height, setHeight] = usePanelSize(DRAWER);
   return (
-    <div className={`drawer${drawer ? " open" : ""}`}>
+    <div className={`drawer${drawer ? " open" : ""}`} style={drawer ? { height } : undefined}>
+      {drawer && <ResizeHandle panel={DRAWER} size={height} edge="top" label="Resize bottom panel" onResize={setHeight} />}
       <div className="tabs">
         {TABS.map((t) => (
           <button key={t.id} className={drawer === t.id ? "active" : ""} onClick={() => setDrawer(drawer === t.id ? null : t.id)}>

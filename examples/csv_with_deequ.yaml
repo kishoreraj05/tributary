@@ -1,0 +1,101 @@
+# Batch: CSV -> the three Deequ runners, each a node of its own on its own branch:
+#   verification  checks constraints and passes the rows on (a gate in front of the SQL node),
+#   analysis      computes metrics (entity, instance, name, value),
+#   suggestion    profiles the columns and suggests constraints.
+# A Deequ node reads the node to check directly; it cannot sit downstream of another Deequ node.
+# Run from the repository root:
+#   tributary plan examples/csv_with_deequ.yaml
+#   tributary preview examples/csv_with_deequ.yaml --node orders_verified
+#   tributary preview examples/csv_with_deequ.yaml --node orders_suggestions
+#   tributary run examples/csv_with_deequ.yaml
+# The first run fetches deequ from Maven Central (spark.jars.packages).
+version: 1
+pipeline:
+  id: orders_deequ
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      out_dir: /tmp/tributary/orders_deequ
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  # VerificationSuite. Each constraint is applied to every column it lists. With output: data
+  # the rows go through unchanged and a failing error-level constraint stops the run before
+  # any sink writes (fail_on: error); the sample data makes a warning-level one fail, which
+  # is reported but lets the run go on.
+  - id: orders_verified
+    type: deequ
+    inputs: [orders_src]
+    options:
+      runner: verification
+      output: data                     # check_results (one row per constraint) | data (pass-through gate)
+      fail_on: error                   # error (default) | warning | never
+      constraints:
+        - { function: has_completeness, columns: [order_id, customer_id], assertion: ">= 0.8" }
+        - { function: is_unique, columns: [order_id] }
+        - { function: has_size, assertion: ">= 1" }
+        - { function: has_pattern, columns: [country], pattern: "^[a-z]{2}$", assertion: ">= 0.8" }
+        - { function: has_mean, columns: [amount], assertion: "between 1 and 1000" }
+        - { function: is_non_negative, columns: [amount], level: warning, hint: "refunds are booked elsewhere" }
+        - { function: satisfies, expression: "amount < 500", name: "no huge orders", where: "country <> 'us'" }
+      results_sinks:
+        - { type: console }
+
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_verified, as: orders }]
+    options:
+      sql: SELECT order_id, amount, upper(country) AS country, order_ts FROM orders
+
+  # AnalysisRunner: metrics, one row each.
+  - id: orders_metrics
+    type: deequ
+    inputs: [orders_src]
+    options:
+      runner: analysis
+      analyzers:
+        - { function: size }
+        - { function: completeness, columns: [order_id, customer_id, amount] }
+        - { function: mean, columns: [amount] }
+        - { function: approx_count_distinct, columns: [country, customer_id] }
+        - { function: histogram, columns: [country] }
+        - { function: compliance, expression: "amount > 0", name: "positive amounts" }
+
+  # ConstraintSuggestionRunner: what deequ would check, as rows (and as code).
+  - id: orders_suggestions
+    type: deequ
+    inputs: [orders_src]
+    options:
+      runner: suggestion
+      rules:
+        - { function: default_rules }              # every simple column
+        - { function: has_max, columns: [amount] } # restricted to the columns listed
+
+sinks:
+  - id: orders_out
+    type: file
+    input: orders_clean
+    options: { path: "${env.out_dir}/orders", format: parquet, mode: overwrite }
+  - id: metrics_out
+    type: file
+    input: orders_metrics
+    options: { path: "${env.out_dir}/metrics", format: json, mode: overwrite }
+  - id: suggestions_console
+    type: console
+    input: orders_suggestions
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

@@ -50,3 +50,11 @@ class Source(Plugin):
     def estimate_input_bytes(self, opts: Any) -> int | None:
         """Best-effort input size, used for automatic resource sizing. None = unknown."""
         return None
+
+    def commit_read(self, ctx: RunContext, opts: Any) -> None:
+        """Called once every sink of a batch run (or of a streaming micro-batch, for the
+        static sources read in it) has written. A source that tracks its own progress, such
+        as an incremental read that should continue where this run stopped, records it here
+        and nowhere earlier: a run that fails before its sinks write must read the same data
+        again. Never called for previews."""
+        return None

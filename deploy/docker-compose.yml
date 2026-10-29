@@ -1,5 +1,9 @@
 # Local dev stack: Kafka (Redpanda, with a built-in Schema Registry), Postgres for DQ
-# results and a Prometheus Pushgateway. MinIO (S3) is behind the opt-in 's3' profile.
+# results, MongoDB for the mongodb source/sink, and a Prometheus Pushgateway. MinIO (S3)
+# is behind the opt-in 's3' profile, Elasticsearch behind 'elasticsearch' and the mock
+# REST API behind 'rest' (or name the service: `up -d elasticsearch`).
+# scripts/local_services.py starts just the services a pipeline's connectors need; see
+# docs/local-development.md.
 services:
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
@@ -20,6 +24,19 @@ services:
       POSTGRES_DB: tributary
     ports: ["5432:5432"]
 
+  # MongoDB for the mongodb source and sink (examples/csv_to_mongodb.yaml), standalone, no
+  # auth: mongodb://localhost:27017 from the host, mongodb://mongodb:27017 from a container.
+  # Data persists in the mongodb-data volume; `docker compose down -v` wipes it.
+  mongodb:
+    image: mongo:7
+    ports: ["27017:27017"]
+    volumes: ["mongodb-data:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Opt-in (docker compose --profile s3 up -d). MinIO no longer publishes this image on
   # Docker Hub or quay.io; point it at an S3-compatible image you can pull.
   minio:
@@ -34,3 +51,27 @@ services:
   pushgateway:
     image: prom/pushgateway:v1.10.0
     ports: ["9091:9091"]
+
+  # Opt-in. A single node without security (deploy/elasticsearch/Dockerfile), as the
+  # Elasticsearch source and sink examples and tests expect (TRIBUTARY_TEST_ES_URL,
+  # TRIBUTARY_TEST_ES_NODES). Load sample orders with deploy/seed_elasticsearch.sh. For a
+  # secured cluster give the node (or its connection) user/password or api_key and ssl.
+  # See deploy/elasticsearch/README.md.
+  elasticsearch:
+    profiles: ["elasticsearch"]
+    build: ./elasticsearch
+    image: tributary/elasticsearch:8.13.4
+    ports: ["9200:9200"]
+
+  # Opt-in (docker compose --profile rest up -d): a mock "university" REST API to test the
+  # REST source and enrichment against, see docs/REST_AS_A_SOURCE.md. Plain Python, no image
+  # build; the same script runs without Docker: python3 scripts/mock_rest_api.py
+  mock-api:
+    profiles: ["rest"]
+    image: python:3.11-slim
+    volumes: ["../scripts/mock_rest_api.py:/mock_rest_api.py:ro"]
+    command: ["python", "/mock_rest_api.py", "--port", "8765", "--token", "local-token"]
+    ports: ["8765:8765"]
+
+volumes:
+  mongodb-data:

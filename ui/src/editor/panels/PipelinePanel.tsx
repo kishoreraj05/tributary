@@ -1,14 +1,15 @@
-import { CircleAlert, Settings2 } from "lucide-react";
+import { CircleAlert, FlaskConical, Laptop, Settings2 } from "lucide-react";
 import { useState } from "react";
 
 import type { Json } from "../../api/types";
 import { IconChip } from "../../components/icons";
 import { KeyValueEditor } from "../../components/KeyValueEditor";
+import { LOCAL_ENV } from "../../model/graph";
 import { useEditor } from "../../store/editor";
 
 /** Shown when no node is selected: pipeline-level settings and environments. */
 export function PipelinePanel() {
-  const { meta, setMeta, issues } = useEditor();
+  const { meta, setMeta, issues, setEnv } = useEditor();
   const [newEnv, setNewEnv] = useState("");
   const pipeline = meta.pipeline;
   const streaming = (pipeline.streaming as Json) ?? {};
@@ -68,10 +69,26 @@ export function PipelinePanel() {
 
       <h3>Environments</h3>
       <div className="desc small field">Variables are used as <span className="mono">{"${env.NAME}"}</span>. Connections are managed on the Connections page.</div>
+      {!(LOCAL_ENV in envs) && (
+        <div className="callout info">
+          <Laptop size={16} />
+          <div>
+            <b>Work locally</b>
+            <div className="small">
+              In an environment named <span className="mono">local</span>, every source can use uploaded dummy data and every
+              sink can be a dummy that writes nothing, so you can build and preview without any system running.
+            </div>
+            <button className="sm" style={{ marginTop: 8 }} onClick={() => { setEnvs({ [LOCAL_ENV]: { vars: {} }, ...envs }); setEnv(LOCAL_ENV); }}>
+              <FlaskConical size={13} />Add local environment
+            </button>
+          </div>
+        </div>
+      )}
       {Object.entries(envs).map(([name, env]) => (
         <div className="subform" key={name}>
           <div className="row">
             <span className="pill info">{name}</span>
+            {name === LOCAL_ENV && <span className="muted small">dummy data allowed</span>}
             <span className="spacer" />
             <button className="link small danger" onClick={() => { const next = { ...envs }; delete next[name]; setEnvs(next); }}>Remove</button>
           </div>

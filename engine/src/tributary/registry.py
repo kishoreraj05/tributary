@@ -7,6 +7,7 @@ an entry point, or call ``register`` for an in-process plugin.
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import re
 from importlib.metadata import entry_points
@@ -62,6 +63,15 @@ class Registry:
                         f"with type_name {getattr(cls, 'type_name', None)!r}"
                     )
                 self.register(cls)
+        # Built-ins are registered even if the installed metadata does not list them yet
+        # (registering the same class twice is a no-op).
+        from .plugins import BUILTIN
+
+        for category, plugins in BUILTIN.items():
+            for name, target in plugins.items():
+                if name not in self._plugins[category]:
+                    module, _, attr = target.partition(":")
+                    self.register(getattr(importlib.import_module(module), attr))
 
     def plugins(self, category: str) -> dict[str, type[Plugin]]:
         self.ensure_loaded()
@@ -80,7 +90,7 @@ class Registry:
 
     def catalog(self) -> dict[str, list[dict[str, Any]]]:
         self.ensure_loaded()
-        return {c: [p.metadata() for _, p in sorted(self._plugins[c].items())] for c in CATEGORIES}
+        return {c: [p.metadata() for _, p in sorted(self._plugins[c].items()) if not p.hidden] for c in CATEGORIES}
 
 
 _default: Registry | None = None

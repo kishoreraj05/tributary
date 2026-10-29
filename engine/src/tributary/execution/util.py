@@ -29,7 +29,16 @@ def read_sample(spark, path: str):
     raise TributaryError(f"unsupported sample file '{path}' (use .csv, .json/.jsonl or .parquet)")
 
 
+# JSON numbers are doubles to a browser: integers past 2**53 (Iceberg snapshot ids, for one)
+# would be rounded in the UI, so previews carry them as strings of digits.
+_EXACT_INT = 2**53
+
+
 def to_jsonable(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and abs(value) > _EXACT_INT:
+        return str(value)
     if isinstance(value, dict):
         return {k: to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

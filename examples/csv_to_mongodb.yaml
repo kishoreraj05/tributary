@@ -1,0 +1,85 @@
+# Batch: CSV orders -> SQL -> quality gate (drop) -> MongoDB collections.
+# Needs a MongoDB server: docker compose -f deploy/docker-compose.yml up -d mongodb
+# Run from the repository root (the first run downloads the MongoDB Spark Connector):
+#   tributary plan examples/csv_to_mongodb.yaml
+#   tributary preview examples/csv_to_mongodb.yaml --node orders_upsert
+#   tributary run examples/csv_to_mongodb.yaml           # run it twice: the upsert stays at 6 documents
+#   docker exec -it deploy-mongodb-1 mongosh tributary --eval 'db.orders.find()'
+#
+# In the UI, the same settings usually come from a connection of type "mongodb"
+# (connection_uri plus username/password marked as secrets), referenced with `connection:`.
+version: 1
+pipeline:
+  id: orders_to_mongodb
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      mongodb_uri: mongodb://localhost:27017
+      mongodb_db: tributary
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country AS _id, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  # Upsert: re-running the pipeline replaces existing orders instead of duplicating them.
+  - id: orders_upsert
+    type: mongodb
+    input: orders_clean
+    options:
+      connection_uri: "${env.mongodb_uri}"
+      database: "${env.mongodb_db}"
+      collection: orders
+      mode: upsert
+      merge_keys: [order_id]
+
+  # One document per country, keyed by the country code (the _id column becomes the document id).
+  - id: revenue_out
+    type: mongodb
+    input: revenue_by_country
+    options:
+      connection_uri: "${env.mongodb_uri}"
+      database: "${env.mongodb_db}"
+      collection: revenue_by_country
+      mode: overwrite
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

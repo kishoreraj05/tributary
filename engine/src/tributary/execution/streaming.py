@@ -19,6 +19,7 @@ def run_streaming(plan: PhysicalPlan, ctx: RunContext, *, await_termination: boo
     if not settings.checkpoint_location:
         raise SpecError([SpecIssue("pipeline.streaming.checkpoint_location", "required to run a streaming pipeline")])
 
+    ctx = dataclasses.replace(ctx, trigger=settings.trigger)
     plugin = ctx.registry.create("source", step.node.type)
     stream = plugin.read_stream(ctx, step.node.options, resolve_source_schema(ctx, step.node))
 

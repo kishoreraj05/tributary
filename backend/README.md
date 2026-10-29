@@ -22,6 +22,7 @@ Settings come from `TRIBUTARY_*` environment variables (or `.env`):
 | `TRIBUTARY_SPARK_MASTER` | `local[*]` | Preview session master |
 | `TRIBUTARY_SPARK_REMOTE` | unset | Spark Connect URL for previews (needs `pyspark[connect]`; untested) |
 | `TRIBUTARY_CORS_ORIGINS` | `["http://localhost:5173"]` | UI origins |
+| `TRIBUTARY_UI_DIR` | unset | A built UI (`ui/dist`) to serve at `/` next to the API, as the Docker image does (`deploy/Dockerfile`) |
 
 ## API (`/api/v1`)
 
@@ -31,7 +32,7 @@ Settings come from `TRIBUTARY_*` environment variables (or `.env`):
 | Pipelines | `GET/POST /pipelines`, `GET/PUT/DELETE /pipelines/{id}` (the draft is saved unvalidated), `POST /pipelines/import`, `GET /pipelines/{id}/export?version=&format=yaml\|json` |
 | Versions | `POST /pipelines/{id}/versions` validates the draft for every env it defines, then freezes it. `GET .../versions`, `GET .../versions/{v}`, `POST .../versions/{v}/restore` |
 | Connections | `GET/POST /connections`, `GET/PUT/DELETE /connections/{name}`. See "Connections" below. |
-| Design | `POST /validate` (`deep` adds per-node schemas/column errors), `POST /plan`, `POST /preview`, `POST /samples` (upload a CSV/JSON/Parquet sample to stand in for a source) |
+| Design | `POST /validate` (`deep` adds per-node schemas/column errors), `POST /plan`, `POST /preview` (compiles only the node and its upstream, so unfinished nodes elsewhere do not block a test), `POST /samples` (upload a CSV/JSON/Parquet sample to stand in for a source) |
 | Runs | `POST /pipelines/{id}/runs {env, version?}`, `GET /runs`, `GET /runs/{id}`, `POST /runs/{id}/cancel`, `GET /runs/{id}/logs`, `GET /runs/{id}/quality`, `WS /runs/{id}/events` |
 | Quality | `GET /quality?pipeline_id=&check_id=&passed=`: DQ history across runs |
 
@@ -39,7 +40,7 @@ Settings come from `TRIBUTARY_*` environment variables (or `.env`):
 
 ## Connections
 
-- Settings are stored per environment (`{env: {field: value}}`).
+- Settings are stored per environment (`{env: {field: value}}`). Sources, sinks and the transforms that declare it (the REST enrichment takes a `rest_api` connection) copy them into their options.
 - Fields named like `password`, `token` or `secret` (or listed in `secret_fields`) are encrypted at rest and returned as `********`.
 - Sending `********` back in an update keeps the stored value.
 
@@ -48,7 +49,7 @@ Settings come from `TRIBUTARY_*` environment variables (or `.env`):
 1. **Starting a run** validates the chosen version for the environment. The run record keeps a resolved spec with secrets masked.
 2. **The worker:** `python -m tributary_backend.worker <run_id>` starts in its own process group, with its own Spark driver.
    - It decrypts secrets in memory only.
-   - It adds a backend metrics sink to every quality block, so all DQ results land in `quality_results`.
+   - It adds a backend metrics sink to every quality block, and to every node that embeds results sinks in its options (the deequ node), so all DQ results land in `quality_results`.
    - It reports status directly to Postgres.
 3. **Cancelling** sends SIGTERM to the whole process group (worker plus JVM), then SIGKILL after 10 s.
 4. **If a worker dies without reporting**, its run is marked failed the next time anyone reads it, and also on API startup.

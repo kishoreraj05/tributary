@@ -1,0 +1,73 @@
+# Batch: a REST API (JSON array of records) -> SQL -> Parquet.
+# The source calls the endpoint on the driver, page by page, and Spark infers the columns
+# from the records (declare `schema:` or `parsing.recordSchema` to fix the types).
+# Run from the repository root:
+#   tributary preview examples/rest_api_to_parquet.yaml -e dev --node users_src
+#   tributary run examples/rest_api_to_parquet.yaml -e dev
+# No network? Use -e local: there the source's dummy data stands in and the API is never called.
+version: 1
+pipeline:
+  id: users_from_api
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      api_base: https://jsonplaceholder.typicode.com
+      out_dir: /tmp/tributary/users_from_api
+  local:
+    vars:
+      api_base: https://jsonplaceholder.typicode.com
+      out_dir: /tmp/tributary/users_from_api
+
+sources:
+  - id: users_src
+    type: rest_api
+    options:
+      endpoint:
+        url: "${env.api_base}/users"
+        method: GET
+        headers: { Accept: application/json }   # add Authorization: "Bearer ${secret:API_TOKEN}" for a private API
+        timeoutSeconds: 15
+        maxRetries: 3
+      parsing:
+        responseType: JSONArray                  # [{...}, {...}]; JSONObject + recordExtractionPath for {"data": [...]}
+        explodeArray: true                       # one row per element
+      pagination:
+        type: none                               # page | offset: pageParam, sizeParam, pageSize, maxPages
+    dummy:                                       # local environment only: these records instead of the API
+      enabled: true
+      data: |
+        {"id": 1, "name": "Dummy One", "username": "dummy1", "email": "one@example.com"}
+        {"id": 2, "name": "Dummy Two", "username": "dummy2", "email": "two@example.com"}
+
+transforms:
+  - id: users_clean
+    type: sql
+    inputs: [{ node: users_src, as: users }]
+    options:
+      sql: |
+        SELECT id, name, username, lower(email) AS email
+        FROM users
+
+quality:
+  - id: users_dq
+    attach_to: users_clean
+    action: observe
+    checks:
+      - { type: not_null, column: id }
+      - { type: unique, columns: [id] }
+    results_sinks: [{ type: console }]
+
+sinks:
+  - id: users_out
+    type: file
+    input: users_clean
+    options: { path: "${env.out_dir}/users", format: parquet, mode: overwrite }
+  - id: users_console
+    type: console
+    input: users_clean
+
+runtime:
+  dev: { master: "local[*]", resources: auto }
+  local: { master: "local[*]", resources: auto }

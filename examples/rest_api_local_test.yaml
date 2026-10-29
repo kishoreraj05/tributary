@@ -1,0 +1,86 @@
+# The local test of REST as a source described in docs/REST_AS_A_SOURCE.md: the mock university
+# API (scripts/mock_rest_api.py, or the docker compose 'rest' profile) -> SQL -> Parquet.
+#   export TRIBUTARY_SECRET_UNIVERSITY_TOKEN=local-token
+#   tributary preview examples/rest_api_local_test.yaml --node students
+#   tributary run examples/rest_api_local_test.yaml
+version: 1
+pipeline:
+  id: rest_local_test
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      api_base: http://localhost:8765          # where the mock API listens
+      out_dir: /tmp/tributary/rest_local_test
+
+sources:
+  - id: students
+    type: rest_api
+    options:
+      endpoint:
+        url: "${env.api_base}/students"
+        method: GET
+        queryParams: { dept: CS }              # static query string: ?dept=CS
+        timeoutSeconds: 10
+        maxRetries: 2
+      authType: bearer
+      token: "${secret:UNIVERSITY_TOKEN}"      # TRIBUTARY_SECRET_UNIVERSITY_TOKEN; the mock expects "local-token"
+      parsing:
+        responseType: JSONArray
+        explodeArray: true
+      pagination:                              # the mock pages with ?page=N&size=M
+        type: page
+        pageParam: page
+        sizeParam: size
+        pageSize: 2
+        maxPages: 10
+    schema:                                    # optional: without it the columns are inferred
+      kind: ddl
+      ddl: "roll_no INT, name STRING, dept STRING, active BOOLEAN, enrolled DATE"
+
+  - id: grades_wrapped
+    type: rest_api
+    options:
+      endpoint: { url: "${env.api_base}/students/wrapped" }
+      authType: bearer
+      token: "${secret:UNIVERSITY_TOKEN}"
+      parsing:
+        responseType: JSONObject               # {"status": 200, "data": {"students": [...], "count": 7}}
+        recordExtractionPath: "$.data.students"
+        explodeArray: true
+
+transforms:
+  - id: active_students
+    type: sql
+    inputs: [students]
+    options:
+      sql: |
+        SELECT roll_no, upper(name) AS name, dept, year(enrolled) AS enrolled_year
+        FROM students
+        WHERE active
+
+quality:
+  - id: students_dq
+    attach_to: active_students
+    action: observe
+    checks:
+      - { type: not_null, column: roll_no }
+      - { type: unique, columns: [roll_no] }
+      - { type: row_count, min: 1 }
+    results_sinks: [{ type: console }]
+
+sinks:
+  - id: students_out
+    type: file
+    input: active_students
+    options: { path: "${env.out_dir}/students", format: parquet, mode: overwrite }
+  - id: students_console
+    type: console
+    input: active_students
+  - id: wrapped_console
+    type: console
+    input: grades_wrapped
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

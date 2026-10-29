@@ -1,0 +1,56 @@
+# Streaming without a broker: new JSON files in a directory are processed as micro-batches
+# and upserted into a Delta table, so the table always holds the latest version of each order.
+# trigger available_now processes what is there and stops; run it again after adding files
+# to examples/data/orders_stream and only the new ones are processed (the checkpoint remembers).
+# Each micro-batch is one Delta commit; a batch replayed after a crash is written once.
+version: 1
+pipeline:
+  id: orders_stream_to_delta
+  mode: streaming
+  streaming:
+    checkpoint_location: /tmp/tributary/orders_stream_to_delta/_checkpoint
+    trigger: available_now                  # processing_time (with interval) keeps it running
+
+environments:
+  dev:
+    vars:
+      in_dir: examples/data/orders_stream
+      lake_dir: /tmp/tributary/orders_stream_to_delta
+
+sources:
+  - id: orders_src
+    type: file
+    options: { path: "${env.in_dir}", format: json, max_files_per_trigger: 1 }
+    schema: { kind: ddl, ddl: "order_id INT, amount DOUBLE, country STRING" }
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: SELECT order_id, amount, upper(country) AS country FROM orders
+
+quality:
+  - id: amount_dq
+    attach_to: orders_clean
+    action: quarantine
+    checks:
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+    quarantine_sink:
+      type: delta
+      options: { path: "${env.lake_dir}/orders_quarantine" }
+
+sinks:
+  - id: orders_latest
+    type: delta
+    input: orders_clean
+    options:
+      path: "${env.lake_dir}/orders"
+      mode: merge
+      merge_keys: [order_id]
+  - id: orders_log
+    type: delta
+    input: orders_clean
+    options: { path: "${env.lake_dir}/orders_log", mode: append }   # every version of every order

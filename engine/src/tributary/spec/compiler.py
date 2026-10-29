@@ -9,7 +9,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ..core.targets import target_fields
 from ..errors import PluginError, SpecError, SpecIssue
+from ..plugins._dummy import LOCAL_ENV, parse_records
 from ..registry import Registry, default_registry
 from .builder import build_spec_model
 from .loader import Interpolator, SecretResolver, load_document
@@ -54,6 +56,8 @@ def compile_pipeline(
     if issues:
         raise SpecError(issues)
 
+    warnings: list[str] = []
+    _apply_dummies(doc, env_name, issues, warnings)
     secrets = SecretResolver(registry) if resolve_secrets else None
     variables = Interpolator({}, secrets, issues).resolve(env_spec.vars, f"environments.{env_name}.vars")
     _merge_connections(doc, env_spec.connections, registry, issues)
@@ -68,12 +72,41 @@ def compile_pipeline(
     except ValidationError as exc:
         raise SpecError(_from_pydantic(exc, resolved)) from None
 
-    semantic_issues, warnings = validate_semantics(spec, registry)
+    semantic_issues, semantic_warnings = validate_semantics(spec, registry)
+    warnings += semantic_warnings
     if semantic_issues:
         raise SpecError(semantic_issues)
     if env_name not in spec.runtime and spec.runtime:
         warnings.append(f"no runtime settings for environment '{env_name}'; using defaults")
     return CompiledPipeline(spec=spec, env=env_name, registry=registry, warnings=warnings)
+
+
+def _apply_dummies(doc: dict[str, Any], env: str, issues: list[SpecIssue], warnings: list[str]) -> None:
+    """In the local environment, a source or sink with ``dummy.enabled`` becomes the dummy
+    plugin of its category, so its own options (and connection) are neither needed nor
+    checked: the source hands its uploaded records downstream, the sink writes nothing.
+    Everywhere else the setting is ignored and the node runs for real."""
+    for key, category in (("sources", "source"), ("sinks", "sink")):
+        for i, node in enumerate(doc.get(key) or []):
+            if not isinstance(node, dict) or not isinstance(node.get("dummy"), dict) or not node["dummy"].get("enabled"):
+                continue
+            if env != LOCAL_ENV:
+                warnings.append(f"{key}[{i}] ({node.get('id')}): dummy data is only used in the '{LOCAL_ENV}' environment")
+                continue
+            options: dict[str, Any] = {"stands_for": node.get("type") or ""}
+            if category == "source":
+                # Bad data is reported on the field, and the node is still swapped: its real
+                # options (and connection) are no more the problem than in a good dummy node.
+                try:
+                    options["records"] = parse_records(node["dummy"].get("data"))
+                except ValueError as exc:
+                    issues.append(SpecIssue(f"{key}[{i}].dummy.data", str(exc)))
+                    options["records"] = []
+                else:
+                    if not options["records"] and not node.get("schema"):
+                        issues.append(SpecIssue(f"{key}[{i}].dummy.data", "upload or paste at least one record (JSON Lines)"))
+            node.update(type="dummy", options=options)
+            node.pop("connection", None)
 
 
 def _select_env(doc: dict[str, Any], env: str | None, issues: list[SpecIssue]) -> tuple[str, EnvironmentSpec]:
@@ -126,9 +159,24 @@ def _merge_connections(
         if isinstance(options, dict):
             node["options"] = {**settings, **options}
 
-    for key, category in (("sources", "source"), ("sinks", "sink")):
+    def merge_embedded(node: Any, category: str, path: str) -> None:
+        """Targets a plugin embeds in its options (a deequ node's results_sinks) take connections too."""
+        if not isinstance(node, dict) or not isinstance(node.get("type"), str) or not isinstance(node.get("options"), dict):
+            return
+        try:
+            plugin = registry.get(category, node["type"])
+        except PluginError:
+            return  # reported by schema validation
+        for field_name, target_category in target_fields(plugin.Options).items():
+            entries = node["options"].get(field_name)
+            if isinstance(entries, list):
+                for j, target in enumerate(entries):
+                    merge(target, target_category, f"{path}.options.{field_name}[{j}]")
+
+    for key, category in (("sources", "source"), ("transforms", "transform"), ("sinks", "sink")):
         for i, node in enumerate(doc.get(key) or []):
             merge(node, category, f"{key}[{i}]")
+            merge_embedded(node, category, f"{key}[{i}]")
     for i, block in enumerate(doc.get("quality") or []):
         if not isinstance(block, dict):
             continue
@@ -156,5 +204,26 @@ def _from_pydantic(exc: ValidationError, doc: Any = None) -> list[SpecIssue]:
                     node = node[part]
                 except (KeyError, IndexError, TypeError):
                     node = None
-        issues.append(SpecIssue(path, err["msg"]))
+        issues.append(SpecIssue(path, _message(err)))
     return issues
+
+
+_NAME_RULE = "letters, digits and _ only, not starting with a digit"
+
+
+def _message(err: dict[str, Any]) -> str:
+    """Pydantic's wording, made actionable. The canvas sends an empty ``input`` for a sink
+    nobody is connected to and an empty ``inputs`` for such a transform, so those two say
+    what to do rather than which regex or list length failed."""
+    field = err["loc"][-1] if err["loc"] else ""
+    value = err.get("input")
+    if err["type"] == "string_pattern_mismatch":
+        if field == "input" and value == "":
+            return "not connected: link a source or transform to this sink"
+        if value == "":
+            return "must not be empty"
+        return f"'{value}' is not a valid name: {_NAME_RULE}"
+    if err["type"] == "too_short" and field == "inputs" and not value:
+        return "not connected: link at least one node to this transform"
+    # Pydantic prefixes custom validator messages with "Value error, ": not useful to users.
+    return err["msg"].removeprefix("Value error, ")

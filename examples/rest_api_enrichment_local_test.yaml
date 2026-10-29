@@ -1,0 +1,93 @@
+# The local test of DataFrame-driven REST calls described in docs/REST_AS_A_SOURCE.md:
+# students.csv -> one call per student to the mock university API -> Parquet.
+#   export TRIBUTARY_SECRET_UNIVERSITY_TOKEN=local-token
+#   tributary preview examples/rest_api_enrichment_local_test.yaml --node grades
+#   tributary run examples/rest_api_enrichment_local_test.yaml
+version: 1
+pipeline:
+  id: rest_enrichment_local_test
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+      out_dir: /tmp/tributary/rest_enrichment_local_test
+    connections:
+      university_api:
+        type: rest_api
+        baseUrl: http://localhost:8765
+        authType: bearer
+        token: "${secret:UNIVERSITY_TOKEN}"
+
+sources:
+  - id: student_enrollment_df
+    type: file
+    options:
+      path: "${env.data_dir}/students.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "student_roll_num INT, name STRING, dept STRING"
+
+transforms:
+  - id: grades
+    type: rest_api_enrichment
+    connection: university_api
+    inputs: [student_enrollment_df]
+    options:
+      endpoint:
+        url: "/students/{roll_no}/grades"
+        method: GET
+      dynamicInput:
+        inputStrategy: DataFrameDriven
+        inputDataFrameRef: student_enrollment_df
+        parameterMapping:
+          pathParams: { roll_no: student_roll_num }
+        onError: fail
+      parsing:
+        responseType: JSONObject
+        recordExtractionPath: "$.data.semesters"
+        explodeArray: true
+        recordSchema: "semester INT, gpa DOUBLE"
+      concurrency:
+        maxConcurrentCalls: 2
+        rateLimitPerExecutor: 5                  # each task: at most 5 calls per second
+        connectionPoolSize: 2
+
+  # The same enrichment with one POST for several students at a time.
+  - id: grades_bulk
+    type: rest_api_enrichment
+    connection: university_api
+    inputs: [student_enrollment_df]
+    options:
+      endpoint:
+        url: "/grades/bulk"
+        method: POST
+      dynamicInput:
+        parameterMapping:
+          bodyTemplate: { ids: "${student_roll_num}" }   # -> {"ids": [1, 2, 3]} per batch
+        bulkRequestSupport: true
+        bulkBatchSize: 3
+        bulkResponseMatch: { responseField: roll_no, inputColumn: student_roll_num }
+      parsing:
+        responseType: JSONArray
+        recordSchema: "roll_no INT, semester INT, gpa DOUBLE"
+      concurrency:
+        maxConcurrentCalls: 1
+
+sinks:
+  - id: grades_out
+    type: file
+    input: grades
+    options: { path: "${env.out_dir}/grades", format: parquet, mode: overwrite }
+  - id: grades_console
+    type: console
+    input: grades
+  - id: grades_bulk_console
+    type: console
+    input: grades_bulk
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

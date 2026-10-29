@@ -67,3 +67,39 @@ def test_preview_uses_stored_connection(client, orders_csv, tmp_path):
 
     missing = client.post("/api/v1/validate", json={"spec": {**doc, "environments": {"prod": {}}}, "env": "prod"}).json()
     assert "no settings for environment 'prod'" in missing["issues"][0]["message"]
+
+
+def test_preview_survives_a_dead_spark_jvm(client, orders_csv, tmp_path):
+    """If the shared preview JVM dies, the next preview starts a fresh one instead of
+    failing forever with 'An error occurred while calling ...'."""
+    from pyspark import SparkContext
+
+    from tributary_backend.services.spark import get_spark
+
+    old = get_spark()
+    proc = SparkContext._gateway.proc
+    proc.kill()
+    proc.wait()
+    doc = spec(orders_csv, tmp_path / "out")
+    body = client.post("/api/v1/preview", json={"spec": doc, "node_id": "orders_src", "limit": 2})
+    assert body.status_code == 200, body.text
+    assert len(body.json()["rows"]) == 2
+    assert get_spark() is not old
+
+
+def test_preview_is_not_blocked_by_an_unfinished_downstream_node(client, orders_csv, tmp_path):
+    """file source -> deequ node with no parameters yet: testing the source still works; testing
+    the deequ node reports its own problem."""
+    doc = spec(orders_csv, tmp_path / "out", quality=[])
+    doc["transforms"] = [{"id": "orders_dq", "type": "deequ", "inputs": ["orders_src"], "options": {}}]
+    doc["sinks"] = [{"id": "out", "type": "console", "input": "orders_dq"}]
+    assert client.post("/api/v1/validate", json={"spec": doc}).json()["valid"] is False  # the pipeline as a whole is not
+
+    response = client.post("/api/v1/preview", json={"spec": doc, "node_id": "orders_src", "limit": 10})
+    assert response.status_code == 200, response.text
+    assert len(response.json()["rows"]) == 4
+
+    response = client.post("/api/v1/preview", json={"spec": doc, "node_id": "orders_dq"})
+    assert response.status_code == 422
+    [issue] = response.json()["detail"]["issues"]
+    assert issue["node_id"] == "orders_dq" and issue["path"] == "transforms[0].options.runner"

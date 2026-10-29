@@ -79,13 +79,24 @@ class DataNodeBase(NodeBase):
     storage_level: StorageLevelName = "MEMORY_AND_DISK"
 
 
+class DummySettings(StrictModel):
+    """Stand-in data for the ``local`` environment (ignored in every other environment)."""
+
+    enabled: bool = Field(False, description="In the local environment, use dummy data instead of the real system")
+    data: str | list[dict[str, Any]] | None = Field(
+        None, description="Sources: the records, as JSON Lines (one JSON object per line, up to 1000) or a list"
+    )
+
+
 class SourceNodeBase(DataNodeBase):
     connection: str | None = None
     stream: bool | None = Field(None, description="Marks the streaming source when a streaming pipeline has several")
+    dummy: DummySettings | None = None
 
 
 class TransformNodeBase(DataNodeBase):
     inputs: list[InputRef] = Field(..., min_length=1)
+    connection: str | None = Field(None, description="For transforms that call an external system (REST enrichment)")
 
     @field_validator("inputs", mode="before")
     @classmethod
@@ -98,6 +109,7 @@ class TransformNodeBase(DataNodeBase):
 class SinkNodeBase(NodeBase):
     input: Identifier
     connection: str | None = None
+    dummy: DummySettings | None = Field(None, description="In the local environment: write nothing, preview the rows")
 
 
 class TargetBase(StrictModel):

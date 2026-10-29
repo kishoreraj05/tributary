@@ -11,3 +11,4 @@ ui/dist/
 .DS_Store
 *.tsbuildinfo
 .claude/
+.coverage

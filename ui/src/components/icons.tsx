@@ -6,17 +6,22 @@ import {
   Database,
   FileText,
   FolderOpen,
+  Globe,
   HardDriveDownload,
   HardDriveUpload,
   Plug,
+  ListChecks,
   Radio,
+  Search,
   ShieldCheck,
   Shuffle,
+  Table2,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
 
 import type { NodeKind } from "../model/graph";
+import { brandIcon, type IconComponent } from "./brands";
 
 /** Plugins declare a generic icon word (see Plugin.icon in the engine). */
 const PLUGIN_ICONS: Record<string, LucideIcon> = {
@@ -27,6 +32,10 @@ const PLUGIN_ICONS: Record<string, LucideIcon> = {
   database: Database,
   chart: BarChart3,
   box: Box,
+  table: Table2,
+  search: Search,
+  globe: Globe,
+  checklist: ListChecks,
 };
 
 export const KIND_ICONS: Record<NodeKind, LucideIcon> = {
@@ -36,9 +45,10 @@ export const KIND_ICONS: Record<NodeKind, LucideIcon> = {
   sink: HardDriveUpload,
 };
 
-export function pluginIcon(icon: string | undefined, kind?: NodeKind): LucideIcon {
+/** The system's own logo when there is one (see brands.tsx), else the plugin's icon word. */
+export function pluginIcon(icon: string | undefined, kind?: NodeKind, type?: string): IconComponent {
   if (kind === "quality") return ShieldCheck;
-  return (icon && PLUGIN_ICONS[icon]) || (kind ? KIND_ICONS[kind] : Box);
+  return brandIcon(type) || (icon && PLUGIN_ICONS[icon]) || (kind ? KIND_ICONS[kind] : Box);
 }
 
 const CONNECTION_ICONS: Record<string, LucideIcon> = {
@@ -49,11 +59,11 @@ const CONNECTION_ICONS: Record<string, LucideIcon> = {
   prometheus: Activity,
 };
 
-export function connectionIcon(type: string): LucideIcon {
-  return CONNECTION_ICONS[type] ?? Plug;
+export function connectionIcon(type: string): IconComponent {
+  return brandIcon(type) ?? CONNECTION_ICONS[type] ?? Plug;
 }
 
-export function IconChip({ icon: Icon, color, size = 16, large = false }: { icon: LucideIcon; color: string; size?: number; large?: boolean }) {
+export function IconChip({ icon: Icon, color, size = 16, large = false }: { icon: IconComponent; color: string; size?: number; large?: boolean }) {
   return (
     <span className={`icon-chip${large ? " lg" : ""}`} style={{ ["--c" as string]: color }}>
       <Icon size={size} strokeWidth={2} />

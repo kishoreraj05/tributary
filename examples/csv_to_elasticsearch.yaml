@@ -1,0 +1,95 @@
+# Batch: CSV orders -> SQL -> quality gate (drop) -> Elasticsearch indices.
+# Start a cluster and run from the repository root (the first run downloads the connector):
+#   docker compose -f deploy/docker-compose.yml up -d elasticsearch
+#   tributary plan examples/csv_to_elasticsearch.yaml
+#   tributary preview examples/csv_to_elasticsearch.yaml --node orders_search
+#   tributary run examples/csv_to_elasticsearch.yaml     # run it twice: orders stays at 6 documents
+#   curl 'localhost:9200/orders/_search?pretty'
+#
+# The cluster comes from a connection, so the same pipeline can point at Elastic Cloud or a
+# secured cluster in another environment (ssl, user/password or api_key) without touching
+# the sinks. In the UI, create a connection of type `elasticsearch` with the same fields.
+version: 1
+pipeline:
+  id: orders_to_elasticsearch
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+    connections:
+      search:
+        type: elasticsearch
+        nodes: localhost:9200                       # Elastic Cloud: my-deployment.es.region.aws.found.io:9243 + ssl: true
+        wan_only: true                              # talk to the listed nodes only (Docker, cloud, proxies)
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  # One document per order, keyed by order_id: re-running the pipeline replaces the
+  # documents instead of adding copies (so does a retried task or a replayed micro-batch).
+  # order_ts is sent as ISO-8601 text, which Elasticsearch maps to a date field by itself.
+  # Documents a busy shard rejects (429) are resent after retry_wait, up to retry_count times.
+  # For an ILM rollover series, write to the alias, create its first index with
+  # is_write_index: true beforehand and set auto_create_index: false.
+  - id: orders_search
+    type: elasticsearch
+    input: orders_clean
+    connection: search
+    options:
+      index: orders
+      id_column: order_id
+      retry_count: 5
+      retry_wait: 5s
+
+  # Rebuilt on every run: the index's documents are deleted before the new ones are indexed.
+  # To spread rows over several indices instead, name a column in the index: "orders-{country}"
+  # (the values must be lowercase), or "events-{order_ts|yyyy.MM}" for one index per month.
+  - id: revenue_search
+    type: elasticsearch
+    input: revenue_by_country
+    connection: search
+    options:
+      index: revenue_by_country
+      mode: overwrite
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

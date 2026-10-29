@@ -11,6 +11,7 @@ from ..errors import TributaryError
 from ..planner import build_plan
 from ..spec import CompiledPipeline
 from .executor import PlanExecutor
+from .explain import physical_plan
 from .quality import annotate_failures
 from .util import read_sample, to_jsonable
 
@@ -24,6 +25,7 @@ class PreviewResult:
     quality: list[dict[str, Any]] = field(default_factory=list)
     target: str | None = None  # sinks: where the data would be written
     written: bool = False
+    plan: str | None = None  # Spark's physical plan for the node's frame, when asked for
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,12 +39,15 @@ def preview_node(
     limit: int = 20,
     sample_data: dict[str, str] | None = None,
     write_sinks: bool = False,
+    explain: bool = False,
 ) -> PreviewResult:
     """Runs only what ``node_id`` depends on, on bounded source reads, and returns its rows.
 
     Quality gates attached to the node run too, so the result shows their pass/fail counts.
     For a quality block itself, the rows are the ones it checks, failing rows first, with a
-    ``_dq_failed_checks`` column. Sinks are a dry run unless ``write_sinks`` is set.
+    ``_dq_failed_checks`` column. Sinks are a dry run unless ``write_sinks`` is set. With
+    ``explain`` the result also carries Spark's physical plan for the node, which shows what
+    reached the sources (pushed-down filters, pruned columns and partitions).
     """
     plan = build_plan(compiled)
     if node_id not in plan.steps:
@@ -74,7 +79,7 @@ def preview_node(
             plugin = compiled.registry.create("sink", step.node.type)
             target = plugin.describe(step.node.options)
             if write_sinks:
-                plugin.write(ctx, df.limit(limit), step.node.options)
+                plugin.write(ctx.for_node(node_id), df.limit(limit), step.node.options)
                 written = True
         return PreviewResult(
             node_id=node_id,
@@ -84,6 +89,7 @@ def preview_node(
             quality=[r.as_dict() for r in result.quality],
             target=target,
             written=written,
+            plan=physical_plan(df) if explain else None,
         )
 
 

@@ -36,6 +36,43 @@ export interface PipelineMeta {
   execution?: Json;
 }
 
+/** The environment in which sources and sinks may stand in with dummy data (see the engine's compiler). */
+export const LOCAL_ENV = "local";
+export const MAX_DUMMY_RECORDS = 1000;
+
+export interface DummySettings {
+  enabled?: boolean;
+  data?: string; // sources: JSON Lines, one record per line
+}
+
+/** A node's dummy-data settings (kept even while switched off, so the records are not lost). */
+export function dummyOf(data: NodeData): DummySettings {
+  return (data.extra.dummy as DummySettings | undefined) ?? {};
+}
+
+/** Whether a node stands in with dummy data in the given environment. */
+export function isDummy(data: NodeData, env: string | null): boolean {
+  return env === LOCAL_ENV && (data.kind === "source" || data.kind === "sink") && Boolean(dummyOf(data).enabled);
+}
+
+/** How many records a JSON Lines text holds, or why it is not JSON Lines (checked again by the engine). */
+export function countRecords(text: string): { count: number; error?: string } {
+  let count = 0;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    try {
+      const value = JSON.parse(lines[i]);
+      if (!value || typeof value !== "object" || Array.isArray(value)) return { count, error: `line ${i + 1} is not a JSON object` };
+    } catch {
+      return { count, error: `line ${i + 1} is not JSON` };
+    }
+    count++;
+  }
+  if (count > MAX_DUMMY_RECORDS) return { count, error: `at most ${MAX_DUMMY_RECORDS} records (${count} given)` };
+  return { count };
+}
+
 export const TAP_HANDLE = "dq";
 export const IN_HANDLE = "in";
 export const OUT_HANDLE = "out";

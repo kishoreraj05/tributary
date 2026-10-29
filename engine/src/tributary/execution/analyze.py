@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..core import RowCheck, RunContext
+from ..errors import short_error
 from ..planner import build_plan
 from ..spec import CompiledPipeline
 from .util import resolve_source_schema
@@ -16,7 +17,14 @@ class NodeAnalysis:
     node_id: str
     ok: bool
     schema: dict[str, Any] | None = None
-    error: str | None = None
+    error: str | None = None  # Spark could not analyse the node
+    # What a sink found wrong with its options for the data it would get, by spec path
+    # ("sinks[0].options.merge_keys"), so they show up under the field like compile issues.
+    issues: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def messages(self) -> list[str]:
+        return ([self.error] if self.error else []) + [i["message"] for i in self.issues]
 
 
 def analyze_pipeline(compiled: CompiledPipeline, spark) -> dict[str, NodeAnalysis]:
@@ -38,14 +46,21 @@ def analyze_pipeline(compiled: CompiledPipeline, spark) -> dict[str, NodeAnalysi
             out[sid] = NodeAnalysis(sid, False, error=f"skipped: upstream {', '.join(missing)} has errors")
             continue
         if step.kind == "sink":
-            out[sid] = NodeAnalysis(sid, True, frames[step.inputs["input"]].schema.jsonValue())
+            schema = frames[step.inputs["input"]].schema
+            try:
+                issues = _sink_issues(ctx, compiled, step, schema)
+            except Exception as exc:  # noqa: BLE001 - a failing check must not hide the schema
+                out[sid] = NodeAnalysis(sid, False, schema.jsonValue(), error=short_error(exc, 500))
+                continue
+            out[sid] = NodeAnalysis(sid, not issues, schema.jsonValue(), issues=issues)
             continue
         try:
-            df = _analyze_step(ctx, step, frames)
+            df = _analyze_step(ctx.for_node(sid), step, frames)
             out[sid] = NodeAnalysis(sid, True, df.schema.jsonValue())
             frames[sid] = df
         except Exception as exc:  # noqa: BLE001 - every failure is reported per node
-            out[sid] = NodeAnalysis(sid, False, error=_short(exc))
+            out[sid] = NodeAnalysis(sid, False, error=short_error(exc, 500))
+    ctx.run_cleanups()
     return out
 
 
@@ -62,6 +77,7 @@ def _analyze_step(ctx: RunContext, step: Any, frames: dict[str, Any]):
         plugin = registry.create("transform", node.type)
         df = plugin.apply(ctx, {alias: frames[sid] for alias, sid in step.inputs.items()}, node.options)
         df.schema  # forces analysis
+        ctx.take_reports()  # a verification node's results on an empty frame mean nothing here
         return df
     df = frames[step.inputs["input"]]
     row_exprs, metric_exprs = [], []
@@ -78,6 +94,12 @@ def _analyze_step(ctx: RunContext, step: Any, frames: dict[str, Any]):
     return df
 
 
-def _short(exc: Exception) -> str:
-    text = str(exc).strip() or type(exc).__name__
-    return text.splitlines()[0][:500]
+def _sink_issues(ctx: RunContext, compiled: CompiledPipeline, step: Any, schema: Any) -> list[dict[str, str]]:
+    node = step.node
+    index = next(i for i, s in enumerate(compiled.spec.sinks) if s is node)
+    plugin = ctx.registry.create("sink", node.type)
+    issues = []
+    for option, message in plugin.validate_input(ctx, schema, node.options):
+        path = f"sinks[{index}].options.{option}" if option else f"sinks[{index}]"
+        issues.append({"path": path, "message": message})
+    return issues

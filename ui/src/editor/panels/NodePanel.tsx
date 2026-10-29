@@ -1,4 +1,4 @@
-import { CircleAlert, FlaskConical, Link2Off, Plus, Trash2, Upload } from "lucide-react";
+import { CircleAlert, FileJson, FlaskConical, Info, Link2Off, Plus, Trash2, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "../../api/client";
@@ -6,7 +6,7 @@ import { plugin, useCatalog, useConnections } from "../../api/hooks";
 import type { Catalog, Category, Json } from "../../api/types";
 import { IconChip, pluginIcon } from "../../components/icons";
 import { SchemaForm } from "../../components/SchemaForm";
-import { isTap, type FlowNode } from "../../model/graph";
+import { countRecords, dummyOf, isDummy, isTap, LOCAL_ENV, MAX_DUMMY_RECORDS, type DummySettings, type FlowNode } from "../../model/graph";
 import { nodeIssues, useEditor } from "../../store/editor";
 import { exactErrors, fieldErrors, nodePath } from "../issues";
 import { runPreview } from "../preview";
@@ -16,7 +16,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function NodePanel({ node }: { node: FlowNode }) {
   const catalog = useCatalog();
-  const { nodes, edges, issues, analysis, updateNode, removeNode, renameNode } = useEditor();
+  const { nodes, edges, issues, analysis, updateNode, removeNode, renameNode, env } = useEditor();
   const unattached = node.data.kind === "quality" && !edges.some((e) => e.source === node.id && isTap(e));
   const [draftId, setDraftId] = useState(node.data.specId);
   const [idError, setIdError] = useState<string | null>(null);
@@ -24,6 +24,8 @@ export function NodePanel({ node }: { node: FlowNode }) {
   if (!catalog) return null;
   const path = nodePath(nodes, node);
   const { kind, type } = node.data;
+  // A dummy node stands in for the real system: its connection and options are not used.
+  const dummy = isDummy(node.data, env);
 
   const commitId = () => {
     if (draftId === node.data.specId) return setIdError(null);
@@ -37,7 +39,7 @@ export function NodePanel({ node }: { node: FlowNode }) {
     <div key={node.id}>
       <div className="panel-head">
         <IconChip
-          icon={pluginIcon(kind === "quality" ? undefined : plugin(catalog, kind as Category, type)?.icon, kind)}
+          icon={pluginIcon(kind === "quality" ? undefined : plugin(catalog, kind as Category, type)?.icon, kind, type)}
           color={`var(--${kind})`}
           size={18}
           large
@@ -77,11 +79,13 @@ export function NodePanel({ node }: { node: FlowNode }) {
         <input className="mono" value={draftId} onChange={(e) => setDraftId(e.target.value)} onBlur={commitId} onKeyDown={(e) => e.key === "Enter" && commitId()} />
         {idError ? <div className="desc error-text">{idError}</div> : <div className="desc">Used as the table name in downstream SQL, unless the input is renamed.</div>}
       </div>
-      {kind === "source" && <SourceFields node={node} catalog={catalog} path={path} />}
+      {(kind === "source" || kind === "sink") && <DummyFields node={node} path={path} />}
+      {kind === "source" && !dummy && <SourceFields node={node} catalog={catalog} path={path} />}
+      {kind === "source" && dummy && <SchemaFields node={node} catalog={catalog} path={path} />}
       {kind === "transform" && <TransformFields node={node} catalog={catalog} path={path} />}
-      {kind === "sink" && <SinkFields node={node} catalog={catalog} path={path} />}
+      {kind === "sink" && !dummy && <SinkFields node={node} catalog={catalog} path={path} />}
       {kind === "quality" && <QualityFields node={node} catalog={catalog} path={path} />}
-      {kind !== "quality" && (
+      {kind !== "quality" && !dummy && (
         <PluginOptions node={node} catalog={catalog} errors={fieldErrors(issues, `${path}.options`)} onChange={(options) => updateNode(node.id, { options })} />
       )}
     </div>
@@ -120,10 +124,8 @@ function ConnectionField({ node, path }: { node: FlowNode; path: string }) {
 }
 
 function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalog; path: string }) {
-  const { updateNode, issues, samples, set, meta } = useEditor();
+  const { updateNode, samples, set, meta } = useEditor();
   const extra = node.data.extra;
-  const schema = (extra.schema as Json) ?? undefined;
-  const kindMeta = schema ? plugin(catalog, "schema", String(schema.kind)) : undefined;
   const sample = samples[node.data.specId];
   const setExtra = (patch: Json) => updateNode(node.id, { extra: { ...extra, ...patch } });
 
@@ -143,22 +145,7 @@ function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalo
           </label>
         </div>
       )}
-      <h3>Schema</h3>
-      <div className="field">
-        <select value={schema ? String(schema.kind) : ""} onChange={(e) => setExtra({ schema: e.target.value ? { kind: e.target.value } : undefined })}>
-          <option value="">none</option>
-          {catalog.components.schema.map((s) => <option key={s.type} value={s.type}>{s.display_name} — {s.description}</option>)}
-        </select>
-      </div>
-      {schema && kindMeta && (
-        <SchemaForm
-          schema={kindMeta.options_schema}
-          value={schema}
-          exclude={["kind"]}
-          errors={fieldErrors(issues, `${path}.schema`)}
-          onChange={(v) => setExtra({ schema: { ...v, kind: schema.kind } })}
-        />
-      )}
+      <SchemaFields node={node} catalog={catalog} path={path} />
       <h3>Sample data</h3>
       <div className="field">
         <label className="row" style={{ fontWeight: 500, color: "var(--muted)" }}><Upload size={13} />CSV, JSON or Parquet</label>
@@ -177,6 +164,119 @@ function SourceFields({ node, catalog, path }: { node: FlowNode; catalog: Catalo
         </div>
       </div>
     </>
+  );
+}
+
+function SchemaFields({ node, catalog, path }: { node: FlowNode; catalog: Catalog; path: string }) {
+  const { updateNode, issues } = useEditor();
+  const extra = node.data.extra;
+  const schema = (extra.schema as Json) ?? undefined;
+  const kindMeta = schema ? plugin(catalog, "schema", String(schema.kind)) : undefined;
+  const setExtra = (patch: Json) => updateNode(node.id, { extra: { ...extra, ...patch } });
+  return (
+    <>
+      <h3>Schema</h3>
+      <div className="field">
+        <select value={schema ? String(schema.kind) : ""} onChange={(e) => setExtra({ schema: e.target.value ? { kind: e.target.value } : undefined })}>
+          <option value="">none</option>
+          {catalog.components.schema.map((s) => <option key={s.type} value={s.type}>{s.display_name} — {s.description}</option>)}
+        </select>
+      </div>
+      {schema && kindMeta && (
+        <SchemaForm
+          schema={kindMeta.options_schema}
+          value={schema}
+          exclude={["kind"]}
+          errors={fieldErrors(issues, `${path}.schema`)}
+          onChange={(v) => setExtra({ schema: { ...v, kind: schema.kind } })}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The local environment's stand-in: a source hands its uploaded records downstream instead
+ * of reading, a sink writes nothing and Preview shows what it would get. Offered only while
+ * the local environment is selected; elsewhere the setting is kept but has no effect.
+ */
+function DummyFields({ node, path }: { node: FlowNode; path: string }) {
+  const { updateNode, issues, env, setEnv, meta } = useEditor();
+  const [fileError, setFileError] = useState<string | null>(null);
+  const settings = dummyOf(node.data);
+  const source = node.data.kind === "source";
+  const setDummy = (patch: DummySettings) => updateNode(node.id, { extra: { ...node.data.extra, dummy: { ...settings, ...patch } } });
+  const hasLocal = LOCAL_ENV in ((meta.environments as Json) ?? {});
+
+  if (env !== LOCAL_ENV) {
+    if (!settings.enabled) return null;
+    return (
+      <div className="callout info">
+        <Info size={16} />
+        <div className="small">
+          Dummy data is on, but only used in the <span className="mono">local</span> environment. Here this node uses its real settings below.
+          {hasLocal && <> <button className="link small" onClick={() => setEnv(LOCAL_ENV)}>Switch to local</button></>}
+        </div>
+      </div>
+    );
+  }
+
+  const data = settings.data ?? "";
+  const { count, error } = countRecords(data);
+  const upload = async (file: File) => {
+    setFileError(null);
+    const text = await file.text();
+    // A JSON array is accepted too, and kept as JSON Lines so it can be edited line by line.
+    let lines = text;
+    if (text.trim().startsWith("[")) {
+      try {
+        lines = (JSON.parse(text) as unknown[]).map((r) => JSON.stringify(r)).join("\n");
+      } catch {
+        return setFileError(`${file.name} is not valid JSON`);
+      }
+    }
+    setDummy({ enabled: true, data: lines });
+  };
+  return (
+    <div className="dummy-box">
+      <label className="switch">
+        <input type="checkbox" role="switch" checked={Boolean(settings.enabled)} onChange={(e) => setDummy({ enabled: e.target.checked })} />
+        <span className="track" aria-hidden />
+        <span>
+          <b>Use dummy data</b>
+          <span className="desc">
+            {source
+              ? "Hand uploaded records downstream instead of reading. Connection and options are not needed."
+              : "Write nothing: Preview shows the rows this sink would get. Connection and options are not needed."}
+          </span>
+        </span>
+      </label>
+      {settings.enabled && source && (
+        <>
+          <div className="field" style={{ marginTop: 12 }}>
+            <label className="row" style={{ fontWeight: 500, color: "var(--muted)" }}>
+              <FileJson size={13} />Records: JSON Lines, one JSON object per line, up to {MAX_DUMMY_RECORDS}
+            </label>
+            <input type="file" accept=".jsonl,.ndjson,.json,.txt" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+            {fileError && <div className="desc error-text">{fileError}</div>}
+          </div>
+          <div className="field">
+            <textarea
+              className="mono"
+              rows={6}
+              spellCheck={false}
+              value={data}
+              placeholder={'{"order_id": 1, "amount": 25.5, "country": "IN"}\n{"order_id": 2, "amount": 9.0, "country": "US"}'}
+              onChange={(e) => setDummy({ data: e.target.value })}
+            />
+            <div className={`desc${error ? " error-text" : ""}`}>
+              {error ?? `${count} record${count === 1 ? "" : "s"}. Columns are inferred from them, or typed by the schema below.`}
+            </div>
+            {exactErrors(issues, `${path}.dummy.data`).map((e) => <div key={e} className="desc error-text">{e}</div>)}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

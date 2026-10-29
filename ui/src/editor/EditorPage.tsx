@@ -7,6 +7,9 @@ import {
   GitCommitHorizontal,
   Loader2,
   Network,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Save,
   TriangleAlert,
@@ -25,7 +28,8 @@ import { Canvas } from "./Canvas";
 import { Drawer } from "./Drawer";
 import { NodePanel } from "./panels/NodePanel";
 import { PipelinePanel } from "./panels/PipelinePanel";
-import { Palette, usePaletteWidth } from "./Palette";
+import { PALETTE, ResizeHandle, SIDE, useCollapsed, usePanelSize } from "./layout";
+import { Palette } from "./Palette";
 import { draftStatus, loadLatestVersionSpec, saveVersion, VersionError, type DraftStatus } from "./versioning";
 
 export function EditorPage() {
@@ -33,7 +37,10 @@ export function EditorPage() {
   const catalog = useCatalog();
   const { pipeline, nodes, selectedId, load, notice, set } = useEditor();
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [paletteWidth, setPaletteWidth] = usePaletteWidth();
+  const [paletteWidth, setPaletteWidth] = usePanelSize(PALETTE);
+  const [paletteCollapsed, setPaletteCollapsed] = useCollapsed("tributary.paletteCollapsed");
+  const [sideWidth, setSideWidth] = usePanelSize(SIDE);
+  const [sideCollapsed, setSideCollapsed] = useCollapsed("tributary.sideCollapsed");
 
   useEffect(() => {
     api
@@ -44,6 +51,11 @@ export function EditorPage() {
       })
       .catch((e) => setLoadError(String(e.message ?? e)));
   }, [id, load]);
+  // Selecting a node brings its settings back into view.
+  useEffect(() => {
+    if (selectedId) setSideCollapsed(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
   useAutosave();
   useLiveValidation();
   useEffect(() => {
@@ -60,16 +72,48 @@ export function EditorPage() {
   return (
     <div className="editor">
       <Toolbar />
-      <div className="workspace" style={{ ["--palette-w" as string]: `${paletteWidth}px` }}>
-        <Palette catalog={catalog} width={paletteWidth} onResize={setPaletteWidth} />
+      <div
+        className="workspace"
+        style={{
+          ["--palette-w" as string]: paletteCollapsed ? "var(--rail-w)" : `${paletteWidth}px`,
+          ["--side-w" as string]: sideCollapsed ? "var(--rail-w)" : `${sideWidth}px`,
+        }}
+      >
+        {paletteCollapsed ? (
+          <Rail side="left" label="Components" onExpand={() => setPaletteCollapsed(false)} icon={<PanelLeftOpen size={15} />} />
+        ) : (
+          <Palette catalog={catalog} width={paletteWidth} onResize={setPaletteWidth} onCollapse={() => setPaletteCollapsed(true)} />
+        )}
         <div className="center">
           <Canvas />
           <Drawer />
         </div>
-        <aside className="side">{selected ? <NodePanel key={selected.id} node={selected} /> : <PipelinePanel />}</aside>
+        {sideCollapsed ? (
+          <Rail side="right" label={selected ? "Node settings" : "Pipeline settings"} onExpand={() => setSideCollapsed(false)} icon={<PanelRightOpen size={15} />} />
+        ) : (
+          <aside className="side">
+            <ResizeHandle panel={SIDE} size={sideWidth} edge="left" label="Resize settings panel" onResize={setSideWidth} />
+            <button className="ghost icon sm side-collapse" onClick={() => setSideCollapsed(true)} title="Collapse settings" aria-label="Collapse settings panel">
+              <PanelRightClose size={15} />
+            </button>
+            <div className="side-body">{selected ? <NodePanel key={selected.id} node={selected} /> : <PipelinePanel />}</div>
+          </aside>
+        )}
       </div>
       {notice && <div className="toast"><CircleCheck size={15} />{notice}</div>}
     </div>
+  );
+}
+
+/** A collapsed side panel: a thin strip with its name and a button to bring it back. */
+function Rail({ side, label, icon, onExpand }: { side: "left" | "right"; label: string; icon: ReactNode; onExpand(): void }) {
+  return (
+    <aside className={`rail ${side}`}>
+      <button className="ghost icon sm" onClick={onExpand} title={`Expand ${label.toLowerCase()}`} aria-label={`Expand ${label.toLowerCase()} panel`}>
+        {icon}
+      </button>
+      <button className="rail-label" onClick={onExpand} tabIndex={-1}>{label}</button>
+    </aside>
   );
 }
 

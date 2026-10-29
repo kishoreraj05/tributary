@@ -5,7 +5,8 @@ from typing import Literal
 from pydantic import Field
 
 from ...core import PluginOptions, Sink
-from .._util import OptionValue, spark_options
+from ...errors import TributaryError
+from .._util import OptionValue, column_errors, format_errors, spark_options
 
 
 class FileSinkOptions(PluginOptions):
@@ -28,7 +29,12 @@ class FileSink(Sink):
     def required_packages(self, opts: FileSinkOptions) -> list[str]:
         return ["org.apache.spark:spark-avro_{scala_version}:{spark_version}"] if opts.format == "avro" else []
 
+    def validate_input(self, ctx, schema, opts: FileSinkOptions) -> list[tuple[str, str]]:
+        return column_errors(schema, {"partition_by": opts.partition_by})
+
     def write(self, ctx, df, opts: FileSinkOptions) -> None:
+        if errors := self.validate_input(ctx, df.schema, opts):
+            raise TributaryError(f"file sink {opts.path}: {format_errors(errors)}")
         if opts.coalesce:
             df = df.coalesce(opts.coalesce)
         writer = df.write.format(opts.format).mode(opts.mode).options(**spark_options(opts.write_options))

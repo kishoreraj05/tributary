@@ -1,0 +1,89 @@
+# Batch: CSV orders -> SQL -> quality gate (drop) -> Apache Iceberg tables in a local warehouse.
+# Run from the repository root (the first run downloads the Iceberg Spark runtime):
+#   tributary plan examples/csv_to_iceberg.yaml
+#   tributary preview examples/csv_to_iceberg.yaml --node orders_merge
+#   tributary run examples/csv_to_iceberg.yaml           # run it twice: the merge stays at 8 rows
+#
+# The catalog comes from a connection, so the same pipeline can point at a Hive metastore,
+# a REST catalog or S3 in another environment without touching the sinks. In the UI, create
+# a connection of type `iceberg` with the same fields.
+version: 1
+pipeline:
+  id: orders_to_iceberg
+  mode: batch
+
+environments:
+  dev:
+    vars:
+      data_dir: examples/data
+    connections:
+      lake:
+        type: iceberg
+        catalog_type: hadoop                        # hive: uri=thrift://...; rest: uri=http://... (+ credential/token)
+        warehouse: /tmp/tributary/warehouse         # or s3a://bucket/warehouse, gs://..., abfss://...
+        catalog_name: lake                          # optional; the name used in Spark SQL (lake.sales.orders)
+
+sources:
+  - id: orders_src
+    type: file
+    options:
+      path: "${env.data_dir}/orders.csv"
+      format: csv
+      read_options: { header: true }
+    schema:
+      kind: ddl
+      ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
+
+transforms:
+  - id: orders_clean
+    type: sql
+    inputs: [{ node: orders_src, as: orders }]
+    options:
+      sql: |
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
+        FROM orders
+
+  - id: revenue_by_country
+    type: sql
+    inputs: [orders_clean]
+    options:
+      sql: |
+        SELECT country, round(sum(amount), 2) AS revenue, count(*) AS orders
+        FROM orders_clean
+        GROUP BY country
+
+quality:
+  - id: orders_clean_dq
+    attach_to: orders_clean
+    action: drop
+    checks:
+      - { type: not_null, column: order_id }
+      - { type: range, column: amount, min: 0 }
+    results_sinks:
+      - { type: console }
+
+sinks:
+  # Upsert: re-running the pipeline updates existing orders instead of duplicating them.
+  - id: orders_merge
+    type: iceberg
+    input: orders_clean
+    connection: lake
+    options:
+      table: sales.orders
+      mode: merge
+      merge_keys: [order_id]
+      partition_by: [country, "days(order_ts)"]   # columns or Iceberg transforms; applied when the table is created
+      table_properties: { format-version: "2" }
+
+  # Overwrite the partitions present in this run's data, keep the others.
+  - id: revenue_out
+    type: iceberg
+    input: revenue_by_country
+    connection: lake
+    options:
+      table: sales.revenue_by_country
+      mode: overwrite_partitions
+      partition_by: [country]
+
+runtime:
+  dev: { master: "local[*]", resources: auto }

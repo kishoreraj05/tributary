@@ -15,6 +15,7 @@ from ..errors import SpecError, SpecIssue, TributaryError
 from ..registry import Registry
 
 _TOKEN = re.compile(r"\$\{([^}]+)\}")
+_RUNTIME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def parse_text(text: str, fmt: str = "yaml") -> dict[str, Any]:
@@ -62,6 +63,10 @@ class Interpolator:
 
     A value that is exactly one placeholder keeps the variable's type (number, list, ...).
     With ``secrets=None`` secret placeholders are left as-is (validation without secrets).
+    A bare ``${name}`` (no ``env.`` or ``secret:`` prefix) is a runtime placeholder that the
+    plugin owning the field fills in, such as a column value in a REST API body template; it
+    is left untouched, unless ``name`` is also a variable, which is then reported as a
+    probable mistake.
     """
 
     def __init__(self, variables: Mapping[str, Any], secrets: SecretResolver | None, issues: list[SpecIssue]):
@@ -96,5 +101,12 @@ class Interpolator:
             except TributaryError as exc:
                 self.issues.append(SpecIssue(path, str(exc)))
                 return original
+        if _RUNTIME.fullmatch(expr):
+            if expr in self.variables:
+                self.issues.append(
+                    SpecIssue(path, f"'${{{expr}}}' names the variable '{expr}': write ${{env.{expr}}} to use it "
+                                    f"(a bare ${{name}} is left for plugins to fill in at runtime)")
+                )
+            return original
         self.issues.append(SpecIssue(path, f"unknown placeholder '${{{expr}}}' (use ${{env.NAME}} or ${{secret:PATH}})"))
         return original
