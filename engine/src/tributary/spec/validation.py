@@ -57,6 +57,25 @@ def validate_semantics(spec: Any, registry: Registry) -> tuple[list[SpecIssue], 
         plugin = registry.create("transform", t.type)
         issues.extend(SpecIssue(f"transforms[{i}].options", msg) for msg in plugin.validate(t.options, aliases))
 
+    upstream_of = {t.id: {ref.node for ref in t.inputs} for t in spec.transforms}
+    for i, t in enumerate(spec.transforms):
+        if registry.get("transform", t.type).chainable:
+            continue
+        seen, stack = set(), list(upstream_of[t.id])
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen or node_id not in upstream_of:
+                continue
+            seen.add(node_id)
+            if data_nodes[node_id].type == t.type:
+                issues.append(SpecIssue(
+                    f"transforms[{i}].inputs",
+                    f"a {t.type} node cannot be downstream of another {t.type} node ('{node_id}'); "
+                    "give each its own branch from the node to check",
+                ))
+                break
+            stack.extend(upstream_of[node_id])
+
     for i, s in enumerate(spec.sinks):
         check_ref(s.input, f"sinks[{i}].input")
 

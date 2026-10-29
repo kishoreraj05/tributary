@@ -47,6 +47,7 @@ class PlanExecutor:
             except Exception:  # noqa: BLE001 - cleanup must not mask the real error
                 self.ctx.log.warning("could not unpersist a cached frame", exc_info=True)
         self._persisted.clear()
+        self.ctx.run_cleanups()
 
     def run(
         self,
@@ -59,6 +60,7 @@ class PlanExecutor:
         needed = self.plan.ancestors(targets) if targets else set(self.plan.order)
         result = ExecutionResult(frames={})
         sinks: list[Step] = []
+        read: list[Step] = []  # sources read by their plugin (not injected) in this run
         for sid in self.plan.order:
             if sid not in needed:
                 continue
@@ -67,15 +69,21 @@ class PlanExecutor:
                 sinks.append(step)
             else:
                 result.frames[sid] = self._evaluate(step, result, overrides)
+                if step.kind == "source" and step.id not in overrides:
+                    read.append(step)
         # Sinks run last: every gate (including 'fail' ones) has passed by now.
         if write_sinks:
             result.sinks_written = self._write_sinks(sinks, result.frames)
+            if not self.ctx.preview:
+                # Only now is what was read safely out: sources may record their progress.
+                for step in read:
+                    self.ctx.registry.create("source", step.node.type).commit_read(self.ctx, step.node.options)
         for step in sinks:
             result.frames[step.id] = result.frames[step.inputs["input"]]
         return result
 
     def _evaluate(self, step: Step, result: ExecutionResult, overrides: dict[str, DataFrame]) -> DataFrame:
-        ctx, node, frames = self.ctx, step.node, result.frames
+        ctx, node, frames = self.ctx.for_node(step.id), step.node, result.frames
         if step.kind == "quality":
             outcome = run_quality(ctx, step, frames[step.inputs["input"]])
             result.quality.extend(outcome.results)
@@ -84,17 +92,19 @@ class PlanExecutor:
         if step.kind == "source":
             if step.id in overrides:
                 return overrides[step.id]
-            df = self._read_source(step)
+            df = self._read_source(step, ctx)
         else:
             plugin = ctx.registry.create("transform", node.type)
             df = plugin.apply(ctx, {alias: frames[sid] for alias, sid in step.inputs.items()}, node.options)
+            # Results a verification node evaluated on its input (a deequ node, for instance).
+            result.quality.extend(ctx.take_reports())
         if step.cache:
             df = df.persist(getattr(StorageLevel, node.storage_level))
             self._persisted.append(df)
         return df
 
-    def _read_source(self, step: Step) -> DataFrame:
-        ctx, node = self.ctx, step.node
+    def _read_source(self, step: Step, ctx: RunContext) -> DataFrame:
+        node = step.node
         plugin = ctx.registry.create("source", node.type)
         schema = resolve_source_schema(ctx, node)
         if ctx.preview:
@@ -105,9 +115,10 @@ class PlanExecutor:
 
     def _write_sinks(self, sinks: list[Step], frames: dict[str, DataFrame]) -> list[str]:
         def write(step: Step) -> str:
-            plugin = self.ctx.registry.create("sink", step.node.type)
-            self.ctx.log.info("writing sink %s: %s", step.id, plugin.describe(step.node.options))
-            plugin.write(self.ctx, frames[step.inputs["input"]], step.node.options)
+            ctx = self.ctx.for_node(step.id)
+            plugin = ctx.registry.create("sink", step.node.type)
+            ctx.log.info("writing sink %s: %s", step.id, plugin.describe(step.node.options))
+            plugin.write(ctx, frames[step.inputs["input"]], step.node.options)
             return step.id
 
         settings = self.plan.spec.execution

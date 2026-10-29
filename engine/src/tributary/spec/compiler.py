@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ..core.targets import target_fields
 from ..errors import PluginError, SpecError, SpecIssue
 from ..registry import Registry, default_registry
 from .builder import build_spec_model
@@ -126,9 +127,24 @@ def _merge_connections(
         if isinstance(options, dict):
             node["options"] = {**settings, **options}
 
-    for key, category in (("sources", "source"), ("sinks", "sink")):
+    def merge_embedded(node: Any, category: str, path: str) -> None:
+        """Targets a plugin embeds in its options (a deequ node's results_sinks) take connections too."""
+        if not isinstance(node, dict) or not isinstance(node.get("type"), str) or not isinstance(node.get("options"), dict):
+            return
+        try:
+            plugin = registry.get(category, node["type"])
+        except PluginError:
+            return  # reported by schema validation
+        for field_name, target_category in target_fields(plugin.Options).items():
+            entries = node["options"].get(field_name)
+            if isinstance(entries, list):
+                for j, target in enumerate(entries):
+                    merge(target, target_category, f"{path}.options.{field_name}[{j}]")
+
+    for key, category in (("sources", "source"), ("transforms", "transform"), ("sinks", "sink")):
         for i, node in enumerate(doc.get(key) or []):
             merge(node, category, f"{key}[{i}]")
+            merge_embedded(node, category, f"{key}[{i}]")
     for i, block in enumerate(doc.get("quality") or []):
         if not isinstance(block, dict):
             continue
@@ -156,5 +172,26 @@ def _from_pydantic(exc: ValidationError, doc: Any = None) -> list[SpecIssue]:
                     node = node[part]
                 except (KeyError, IndexError, TypeError):
                     node = None
-        issues.append(SpecIssue(path, err["msg"]))
+        issues.append(SpecIssue(path, _message(err)))
     return issues
+
+
+_NAME_RULE = "letters, digits and _ only, not starting with a digit"
+
+
+def _message(err: dict[str, Any]) -> str:
+    """Pydantic's wording, made actionable. The canvas sends an empty ``input`` for a sink
+    nobody is connected to and an empty ``inputs`` for such a transform, so those two say
+    what to do rather than which regex or list length failed."""
+    field = err["loc"][-1] if err["loc"] else ""
+    value = err.get("input")
+    if err["type"] == "string_pattern_mismatch":
+        if field == "input" and value == "":
+            return "not connected: link a source or transform to this sink"
+        if value == "":
+            return "must not be empty"
+        return f"'{value}' is not a valid name: {_NAME_RULE}"
+    if err["type"] == "too_short" and field == "inputs" and not value:
+        return "not connected: link at least one node to this transform"
+    # Pydantic prefixes custom validator messages with "Value error, ": not useful to users.
+    return err["msg"].removeprefix("Value error, ")

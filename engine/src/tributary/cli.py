@@ -8,10 +8,10 @@ from typing import Optional
 import typer
 
 from . import api
-from .errors import QualityFailure, SpecError, TributaryError
+from .errors import QualityFailure, SpecError, TributaryError, short_error
 from .planner import build_plan
 from .runtime import decide_resources
-from .spec import dump_document, load_document
+from .spec import dump_document, load_document, restrict_to
 
 app = typer.Typer(
     name="tributary",
@@ -31,9 +31,13 @@ def _setup(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
     logging.getLogger("py4j").setLevel(logging.WARNING)
 
 
-def _compile(file: Path, env: Optional[str], *, secrets: bool = False):
+def _compile(file: Path, env: Optional[str], *, secrets: bool = False, only_node: Optional[str] = None):
+    """``only_node`` compiles just that node and its upstream (what a preview needs)."""
     try:
-        compiled = api.compile_pipeline(file, env, resolve_secrets=secrets)
+        doc = load_document(file)
+        if only_node:
+            doc = restrict_to(doc, only_node)
+        compiled = api.compile_pipeline(doc, env, resolve_secrets=secrets)
     except SpecError as exc:
         typer.secho(f"✗ {file} is invalid:", fg="red", err=True)
         for issue in exc.issues:
@@ -57,13 +61,16 @@ def validate(
     """Validate a pipeline: schema, references, DAG, SQL tables (and with --deep, columns)."""
     compiled = _compile(file, env, secrets=deep)
     if deep:
-        from pyspark.sql import SparkSession
+        from .runtime import create_session
 
-        spark = SparkSession.builder.master("local[1]").appName("tributary-validate").config("spark.ui.enabled", "false").getOrCreate()
+        # The pipeline's own session, as for preview and run: plugins whose schema comes from
+        # the data system (a Delta table's log, an existing sink table) need their jars and settings.
+        spark = create_session(compiled, decide_resources(compiled))
         _quiet(spark)
         failures = [a for a in api.analyze(compiled, spark=spark).values() if not a.ok]
         for a in failures:
-            typer.secho(f"✗ {a.node_id}: {a.error}", fg="red", err=True)
+            for message in a.messages:
+                typer.secho(f"✗ {a.node_id}: {message}", fg="red", err=True)
         if failures:
             raise typer.Exit(1)
     typer.secho(f"✓ {compiled.pipeline_id} is valid (env={compiled.env})", fg="green")
@@ -97,7 +104,7 @@ def run(file: Path = FileArg, env: Optional[str] = EnvOpt) -> None:
     except Exception as exc:  # noqa: BLE001 - Spark errors: show the gist, full trace with -v
         if logging.getLogger().isEnabledFor(logging.INFO):
             raise
-        typer.secho(f"✗ {str(exc).strip().splitlines()[0]}  (rerun with -v for details)", fg="red", err=True)
+        typer.secho(f"✗ {short_error(exc)}  (rerun with -v for details)", fg="red", err=True)
         raise typer.Exit(1) from None
     if isinstance(summary, api.RunSummary):
         failed = [r for r in summary.quality if not r.passed]
@@ -118,8 +125,8 @@ def preview(
     write: bool = typer.Option(False, "--write", help="For sinks: actually write the sample"),
     as_json: bool = typer.Option(False, "--json", help="Print the result as JSON"),
 ) -> None:
-    """Preview a node's output on a bounded sample."""
-    compiled = _compile(file, env, secrets=True)
+    """Preview a node's output on a bounded sample (only the node and its upstream need to be valid)."""
+    compiled = _compile(file, env, secrets=True, only_node=node)
     samples = {}
     for item in sample:
         source_id, sep, path = item.partition("=")
@@ -131,9 +138,16 @@ def preview(
 
         spark = create_session(compiled, decide_resources(compiled))
         _quiet(spark)
+        kept = {s.id for s in compiled.spec.sources}  # sources left out of the preview need no sample
+        samples = {k: v for k, v in samples.items() if k in kept}
         result = api.preview(compiled, node, spark=spark, limit=limit, sample_data=samples, write_sinks=write)
     except TributaryError as exc:
         typer.secho(f"✗ {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
+    except Exception as exc:  # noqa: BLE001 - Spark errors: show the gist, full trace with -v
+        if logging.getLogger().isEnabledFor(logging.INFO):
+            raise
+        typer.secho(f"✗ {short_error(exc)}  (rerun with -v for details)", fg="red", err=True)
         raise typer.Exit(1) from None
     if as_json:
         typer.echo(json.dumps(result.to_dict(), indent=2, default=str))

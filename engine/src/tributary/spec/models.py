@@ -86,6 +86,7 @@ class SourceNodeBase(DataNodeBase):
 
 class TransformNodeBase(DataNodeBase):
     inputs: list[InputRef] = Field(..., min_length=1)
+    connection: str | None = Field(None, description="For transforms that call an external system (REST enrichment)")
 
     @field_validator("inputs", mode="before")
     @classmethod

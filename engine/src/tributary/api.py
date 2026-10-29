@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .core import CheckResult, RunContext
-from .execution import PlanExecutor, PreviewResult, analyze_pipeline, preview_node, run_streaming
+from .execution import PlanExecutor, PreviewResult, analyze_pipeline, explain_pipeline, preview_node, run_streaming
 from .execution.analyze import NodeAnalysis
 from .planner import PhysicalPlan, build_plan
 from .registry import Registry, default_registry
 from .runtime import create_session, decide_resources
-from .spec import CompiledPipeline
+from .spec import CompiledPipeline, load_document, restrict_to
 from .spec import compile_pipeline as _compile
 from .spec.schema_export import export_schema as _export_schema
 
@@ -61,17 +61,31 @@ def run(source: Source, env: str | None = None, *, spark=None, registry: Registr
 
 
 def preview(source: Source, node_id: str, env: str | None = None, *, spark=None, limit: int = 20,
-            sample_data: dict[str, str] | None = None, write_sinks: bool = False,
+            sample_data: dict[str, str] | None = None, write_sinks: bool = False, explain: bool = False,
             registry: Registry | None = None) -> PreviewResult:
+    """Previews ``node_id``. A document is first restricted to the node and its upstream (see
+    ``restrict_to``), so problems elsewhere in the pipeline do not block the test; a
+    CompiledPipeline is used as is."""
+    if not isinstance(source, CompiledPipeline):
+        source = restrict_to(load_document(source), node_id)
+        sources = {s.get("id") for s in source.get("sources") or [] if isinstance(s, dict)}
+        sample_data = {k: v for k, v in (sample_data or {}).items() if k in sources}
     compiled = compile_pipeline(source, env, registry=registry, resolve_secrets=True)
     return preview_node(compiled, node_id, _session(compiled, spark), limit=limit, sample_data=sample_data,
-                        write_sinks=write_sinks)
+                        write_sinks=write_sinks, explain=explain)
 
 
 def analyze(source: Source, env: str | None = None, *, spark=None,
             registry: Registry | None = None) -> dict[str, NodeAnalysis]:
     compiled = compile_pipeline(source, env, registry=registry, resolve_secrets=True)
     return analyze_pipeline(compiled, _session(compiled, spark))
+
+
+def explain(source: Source, env: str | None = None, *, spark=None,
+            registry: Registry | None = None) -> dict[str, str]:
+    """Spark's physical plan per source and transform, built like a run (lazy, nothing read)."""
+    compiled = compile_pipeline(source, env, registry=registry, resolve_secrets=True)
+    return explain_pipeline(compiled, _session(compiled, spark))
 
 
 def export_schema(registry: Registry | None = None) -> dict[str, Any]:

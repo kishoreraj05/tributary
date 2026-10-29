@@ -8,6 +8,7 @@ from .schema import ResolvedSchema, SchemaResolver
 from .secrets import SecretProvider
 from .sink import Sink
 from .source import BatchReadable, Source, StreamReadable
+from .targets import Target, embedded_targets, target_fields, targets
 from .transform import Transform
 
 __all__ = [
@@ -28,5 +29,9 @@ __all__ = [
     "Sink",
     "Source",
     "StreamReadable",
+    "Target",
     "Transform",
+    "embedded_targets",
+    "target_fields",
+    "targets",
 ]

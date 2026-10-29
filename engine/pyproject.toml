@@ -11,8 +11,10 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
   "pyspark>=3.5,<4",  # 4.x (Java 17+) not tested yet
-  "pydantic>=2.6,<3",
+  "delta-spark>=3.2,<4",  # Delta's Python API; the Delta sink pins the matching jar (3.x = Spark 3.5)
+  "pydantic>=2.9,<3",  # field_title_generator (REST options use camelCase keys)
   "pyyaml>=6",
+  "requests>=2.31",  # REST API source/enrichment; needed on the executors too
   "sqlglot>=25",
   "typer>=0.12",
 ]
@@ -30,13 +32,26 @@ tributary = "tributary.cli:app"
 [project.entry-points."tributary.sources"]
 file = "tributary.plugins.sources.file:FileSource"
 kafka = "tributary.plugins.sources.kafka:KafkaSource"
+mongodb = "tributary.plugins.sources.mongodb:MongoDbSource"
+delta = "tributary.plugins.sources.delta:DeltaSource"
+elasticsearch = "tributary.plugins.sources.elasticsearch:ElasticsearchSource"
+rest_api = "tributary.plugins.sources.rest_api:RestApiSource"
+hudi = "tributary.plugins.sources.hudi:HudiSource"
+iceberg = "tributary.plugins.sources.iceberg:IcebergSource"
 
 [project.entry-points."tributary.transforms"]
 sql = "tributary.plugins.transforms.sql:SqlTransform"
+rest_api_enrichment = "tributary.plugins.transforms.rest_api_enrichment:RestApiEnrichment"
+deequ = "tributary.plugins.transforms.deequ:DeequTransform"
 
 [project.entry-points."tributary.sinks"]
 file = "tributary.plugins.sinks.file:FileSink"
 console = "tributary.plugins.sinks.console:ConsoleSink"
+iceberg = "tributary.plugins.sinks.iceberg:IcebergSink"
+delta = "tributary.plugins.sinks.delta:DeltaSink"
+elasticsearch = "tributary.plugins.sinks.elasticsearch:ElasticsearchSink"
+mongodb = "tributary.plugins.sinks.mongodb:MongoDbSink"
+hudi = "tributary.plugins.sinks.hudi:HudiSink"
 
 [project.entry-points."tributary.checks"]
 not_null = "tributary.plugins.checks.row:NotNullCheck"

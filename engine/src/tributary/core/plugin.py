@@ -39,11 +39,21 @@ class Plugin(ABC):
     icon: ClassVar[str] = "box"
     # Maven coordinates; "{spark_version}" and "{scala_version}" are filled in at session build.
     spark_packages: ClassVar[tuple[str, ...]] = ()
+    # Spark settings the plugin needs in every session it runs in (for example SQL extensions).
+    # Static settings only: anything that depends on the options goes in ``required_conf``.
+    spark_conf: ClassVar[dict[str, str]] = {}
     # Connection types (besides type_name itself) this plugin can take settings from; "*" = any.
     accepts_connections: ClassVar[tuple[str, ...]] = ()
 
     def required_packages(self, opts: Any) -> list[str]:
         return list(self.spark_packages)
+
+    def required_conf(self, opts: Any) -> dict[str, str]:
+        """Spark settings to apply when the session is built (catalogs, extensions, ...).
+
+        The user's ``runtime.spark_conf`` still wins, except ``spark.sql.extensions``,
+        where every contribution is kept."""
+        return dict(self.spark_conf)
 
     @classmethod
     def capabilities(cls) -> list[str]:
@@ -64,5 +74,6 @@ class Plugin(ABC):
             "description": cls.description or (doc.splitlines()[0] if doc else ""),
             "icon": cls.icon,
             "capabilities": cls.capabilities(),
+            "connection_types": [cls.type_name, *cls.accepts_connections],
             "options_schema": cls.Options.model_json_schema(),
         }

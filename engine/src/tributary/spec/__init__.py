@@ -2,6 +2,7 @@ from .builder import build_spec_model
 from .compiler import CompiledPipeline, compile_pipeline
 from .loader import dump_document, load_document, parse_text
 from .models import RuntimeSpec
+from .subset import restrict_to
 
 __all__ = [
     "CompiledPipeline",
@@ -11,4 +12,5 @@ __all__ = [
     "dump_document",
     "load_document",
     "parse_text",
+    "restrict_to",
 ]

@@ -31,7 +31,7 @@ class Step:
     reads: int = 0  # how many times this step's output is read
     cache: bool = False  # persist this step's output
     persist_flags: bool = False  # quality: persist the flagged frame it splits
-    passthrough: bool = False  # quality: output is its input unchanged
+    passthrough: bool = False  # quality/transform: output is its input unchanged (the input is only observed)
 
     @property
     def type(self) -> str | None:
@@ -81,6 +81,8 @@ class PhysicalPlan:
                 notes.append(f"persist {step.node.storage_level} ({step.reads} reads)")
             if step.persist_flags:
                 notes.append(f"flagged rows persisted ({step.reads + 1 + (step.node.action == 'quarantine')} reads)")
+            if step.kind == "transform" and step.passthrough:
+                notes.append("pass-through; its input is read once more")
             line = f"  {n:>2}. {head}"
             if src:
                 line += f" <- {src}"
@@ -126,7 +128,9 @@ def build_plan(compiled: CompiledPipeline) -> PhysicalPlan:
         add_data_step(Step(s.id, "source", s, stream=s.id == stream_id))
     # Transforms in dependency order so their inputs' effective outputs exist.
     for t in _topological(spec.transforms):
-        add_data_step(Step(t.id, "transform", t, inputs={r.view_name: effective[r.node] for r in t.inputs}))
+        plugin = registry.create("transform", t.type)
+        inputs = {r.view_name: effective[r.node] for r in t.inputs}
+        add_data_step(Step(t.id, "transform", t, inputs=inputs, passthrough=plugin.is_passthrough(t.options)))
     for s in spec.sinks:
         last = effective[s.input]
         for q in before[s.id]:
@@ -169,9 +173,10 @@ def _decide_caching(steps: dict[str, Step]) -> None:
         if sid not in memo:
             total = 0
             for c in consumers[sid]:
-                # A pass-through gate runs one aggregate over its input and hands the same
-                # frame on, so its consumers read the upstream output too.
-                total += 1 + reads(c.id) if c.kind == "quality" and c.passthrough else 1
+                # A pass-through step (observe/fail gate, verification node) runs one aggregate
+                # over its input and hands the same frame on, so its consumers read the
+                # upstream output too.
+                total += 1 + reads(c.id) if c.passthrough else 1
             memo[sid] = total
         return memo[sid]
 
@@ -179,8 +184,11 @@ def _decide_caching(steps: dict[str, Step]) -> None:
         step.reads = reads(step.id)
         if step.kind in ("source", "transform"):
             mode = step.node.cache
-            # A streaming source's micro-batch is persisted by the streaming executor.
-            step.cache = not step.stream and (mode == "always" or (mode == "auto" and step.reads >= 2))
+            # A streaming source's micro-batch is persisted by the streaming executor. A
+            # pass-through transform hands its input on: that input is what gets persisted.
+            step.cache = not step.stream and (
+                mode == "always" or (mode == "auto" and not step.passthrough and step.reads >= 2)
+            )
         elif step.kind == "quality" and not step.passthrough:
             flagged_reads = 1 + (step.node.action == "quarantine") + step.reads
             step.persist_flags = flagged_reads >= 2
