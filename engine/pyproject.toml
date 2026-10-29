@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Config-driven, plugin-based PySpark engine for batch and streaming data pipelines"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "PolyForm-Noncommercial-1.0.0" }
+license = { text = "Apache-2.0" }
 dependencies = [
   "pyspark>=3.5,<4",  # 4.x (Java 17+) not tested yet
   "delta-spark>=3.2,<4",  # Delta's Python API; the Delta sink pins the matching jar (3.x = Spark 3.5)
