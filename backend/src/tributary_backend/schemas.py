@@ -58,6 +58,9 @@ class VersionSummary(ORM):
 class VersionOut(VersionSummary):
     spec: dict[str, Any]
     ui_layout: dict[str, Any]
+    # Problems that did not block the version: settings missing only on dummy nodes,
+    # outside the local environment ("dev: sources[0].options.path: Field required").
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ImportRequest(BaseModel):

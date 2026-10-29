@@ -30,9 +30,15 @@ class RunSummary:
 
 
 def compile_pipeline(
-    source: Source, env: str | None = None, *, registry: Registry | None = None, resolve_secrets: bool = False
+    source: Source,
+    env: str | None = None,
+    *,
+    registry: Registry | None = None,
+    resolve_secrets: bool = False,
+    use_dummies: bool | None = None,
 ) -> CompiledPipeline:
-    return _compile(source, env, registry=registry, resolve_secrets=resolve_secrets)
+    """``use_dummies``: see ``spec.compile_pipeline`` (default: dummy nodes stand in only in the local environment)."""
+    return _compile(source, env, registry=registry, resolve_secrets=resolve_secrets, use_dummies=use_dummies)
 
 
 def plan(source: Source, env: str | None = None, *, registry: Registry | None = None) -> PhysicalPlan:

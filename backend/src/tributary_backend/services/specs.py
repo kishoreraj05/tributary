@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from tributary import LOCAL_ENV
 from tributary.errors import SpecError, SpecIssue
 
 from ..crypto import decrypt
@@ -22,7 +23,9 @@ def looks_secret(field: str) -> bool:
     return any(hint in name for hint in _SECRET_HINTS)
 
 
-def referenced_connections(spec: dict[str, Any]) -> list[str]:
+def referenced_connections(spec: dict[str, Any], env: str | None = None) -> list[str]:
+    """The connection names a spec uses. In the local environment a node with dummy data
+    uses none: it stands in for the system its connection points at."""
     names: list[str] = []
 
     def add(node: Any) -> None:
@@ -31,6 +34,8 @@ def referenced_connections(spec: dict[str, Any]) -> list[str]:
 
     for key in ("sources", "transforms", "sinks"):
         for node in spec.get(key) or []:
+            if env == LOCAL_ENV and isinstance(node, dict) and isinstance(node.get("dummy"), dict) and node["dummy"].get("enabled"):
+                continue
             add(node)
             options = node.get("options") if isinstance(node, dict) else None
             if isinstance(options, dict):
@@ -76,7 +81,7 @@ def materialize(
     inline = block.setdefault("connections", {})
 
     issues = []
-    for name in referenced_connections(doc):
+    for name in referenced_connections(doc, env_name):
         if name in inline or name not in by_name:
             continue  # inline wins; unknown names are reported by the engine
         conn = by_name[name]

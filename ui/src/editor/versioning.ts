@@ -41,18 +41,24 @@ export async function saveVersion(message: string): Promise<number> {
   try {
     await api.saveDraft(pipeline.id, spec, layoutOf(nodes));
     const version = await api.createVersion(pipeline.id, message);
+    // Dummy nodes may lack their real settings in other environments: saved, but say where.
+    const pending = [...new Set((version.warnings ?? []).map((w) => w.split(":")[0]))];
     set({
       pipeline: { ...pipeline, latest_version: version.version },
       versionSpec: spec,
       saveState: "saved",
-      notice: `Saved version ${version.version}`,
+      notice: pending.length
+        ? `Saved version ${version.version}. Dummy nodes still need real settings to run in: ${pending.join(", ")}`
+        : `Saved version ${version.version}`,
     });
     return version.version;
   } catch (e) {
-    const detail = e instanceof ApiError ? (e.detail as { issues?: Issue[] }) : null;
+    const detail = e instanceof ApiError ? (e.detail as { issues?: Issue[]; env?: string | null }) : null;
     if (detail?.issues) {
-      set({ issues: detail.issues });
-      throw new VersionError(detail.issues.map((i) => `${i.node_id ?? i.path}: ${i.message}`));
+      // Only show them on the canvas when they are about the environment being edited.
+      if (!detail.env || detail.env === useEditor.getState().env) set({ issues: detail.issues });
+      const where = detail.env ? `[${detail.env}] ` : "";
+      throw new VersionError(detail.issues.map((i) => `${where}${i.node_id ?? i.path}: ${i.message}`));
     }
     throw new VersionError([String((e as Error).message)]);
   }

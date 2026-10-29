@@ -95,19 +95,34 @@ def delete_pipeline(pipeline_id: str, session: Session = Depends(get_session)):
 @router.post("/{pipeline_id}/versions", response_model=VersionOut, status_code=201)
 def create_version(pipeline_id: str, body: VersionCreate, session: Session = Depends(get_session)):
     """Freezes the current draft as the next immutable version, after validating it for
-    every environment it defines (only valid pipelines can be versioned and run)."""
+    every environment it defines (only valid pipelines can be versioned and run).
+
+    Nodes with dummy data stand in for systems that may not be set up yet, so in the
+    environments where they run for real (all but local) their missing settings do not
+    block the version: they come back as warnings, and a run there fails until they are
+    filled in. Everything else must be valid everywhere."""
     pipeline = pipeline_or_404(session, pipeline_id, lock=True)
     spec = pipeline.draft_spec or {}
     envs = list((spec.get("environments") or {}).keys()) or [None]
     conns = connections(session)
+    warnings: list[str] = []
     for env in envs:
+        doc, env_name = None, env
         try:
             doc, env_name = materialize(spec, env, conns, reveal=False)
             compile_pipeline(doc, env_name)
         except SpecError as exc:
-            body_ = spec_error_body(exc, spec)
-            body_["env"] = env
-            raise HTTPException(422, body_) from None
+            try:
+                # The same environment with the dummy nodes standing in: if that is valid,
+                # the only problems were the dummy nodes' own settings.
+                if doc is None:
+                    raise
+                compile_pipeline(doc, env_name, use_dummies=True)
+            except SpecError as blocking:
+                body_ = spec_error_body(blocking, spec)
+                body_["env"] = env
+                raise HTTPException(422, body_) from None
+            warnings += [f"{env_name}: {i.path}: {i.message}" for i in exc.issues]
     pipeline.latest_version += 1
     version = PipelineVersion(
         pipeline_id=pipeline.id,
@@ -118,7 +133,7 @@ def create_version(pipeline_id: str, body: VersionCreate, session: Session = Dep
     )
     session.add(version)
     session.commit()
-    return version
+    return VersionOut.model_validate(version).model_copy(update={"warnings": warnings})
 
 
 @router.get("/{pipeline_id}/versions", response_model=list[VersionSummary])
