@@ -1,5 +1,5 @@
-import { ChevronDown, MousePointerClick, Search } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { ChevronDown, MousePointerClick, PanelLeftClose, Search } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { Catalog, PluginMeta } from "../api/types";
@@ -7,6 +7,7 @@ import { KIND_ICONS, pluginIcon } from "../components/icons";
 import type { NodeKind } from "../model/graph";
 import { useEditor } from "../store/editor";
 import { DRAG_MIME } from "./Canvas";
+import { PALETTE, ResizeHandle } from "./layout";
 
 const GROUPS: { kind: NodeKind; label: string }[] = [
   { kind: "source", label: "Sources" },
@@ -37,75 +38,6 @@ const QUALITY_ITEM: Item = {
 const shortName = (name: string) => name.replace(/\s*\(.*\)\s*$/, "") || name;
 
 // ---------------------------------------------------------------------------
-// Width: the palette's right edge can be dragged; the width is remembered.
-
-const WIDTH_KEY = "tributary.paletteWidth";
-export const PALETTE_DEFAULT = 248;
-const MIN = 176;
-const MAX = 520;
-const clamp = (w: number) => Math.min(MAX, Math.max(MIN, Math.round(w)));
-
-export function usePaletteWidth(): [number, (w: number) => void] {
-  const [width, setWidth] = useState(() => {
-    try {
-      const saved = Number(localStorage.getItem(WIDTH_KEY));
-      return saved ? clamp(saved) : PALETTE_DEFAULT;
-    } catch {
-      return PALETTE_DEFAULT;
-    }
-  });
-  const update = (w: number) => {
-    const next = clamp(w);
-    setWidth(next);
-    try {
-      localStorage.setItem(WIDTH_KEY, String(next));
-    } catch {
-      /* not persisted */
-    }
-  };
-  return [width, update];
-}
-
-function ResizeHandle({ width, onResize }: { width: number; onResize(w: number): void }) {
-  const start = useRef<{ x: number; width: number } | null>(null);
-  const onPointerDown = (e: PointerEvent) => {
-    start.current = { x: e.clientX, width };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    document.body.classList.add("resizing");
-  };
-  const onPointerMove = (e: PointerEvent) => {
-    if (start.current) onResize(start.current.width + e.clientX - start.current.x);
-  };
-  const stop = () => {
-    start.current = null;
-    document.body.classList.remove("resizing");
-  };
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowLeft") onResize(width - 16);
-    if (e.key === "ArrowRight") onResize(width + 16);
-  };
-  return (
-    <div
-      className="resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize components panel"
-      aria-valuenow={width}
-      aria-valuemin={MIN}
-      aria-valuemax={MAX}
-      tabIndex={0}
-      title="Drag to resize · double-click to reset"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={stop}
-      onPointerCancel={stop}
-      onDoubleClick={() => onResize(PALETTE_DEFAULT)}
-      onKeyDown={onKeyDown}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
 
 interface Hover {
   item: Item;
@@ -114,7 +46,7 @@ interface Hover {
   unsupported: boolean;
 }
 
-export function Palette({ catalog, width, onResize }: { catalog: Catalog; width: number; onResize(w: number): void }) {
+export function Palette({ catalog, width, onResize, onCollapse }: { catalog: Catalog; width: number; onResize(w: number): void; onCollapse(): void }) {
   const addNode = useEditor((s) => s.addNode);
   const mode = useEditor((s) => String(s.meta.pipeline.mode ?? "batch"));
   const [query, setQuery] = useState("");
@@ -152,6 +84,9 @@ export function Palette({ catalog, width, onResize }: { catalog: Catalog; width:
           <Search size={14} />
           <input value={query} placeholder="Search components" onChange={(e) => setQuery(e.target.value)} />
         </div>
+        <button className="ghost icon sm" onClick={onCollapse} title="Collapse components" aria-label="Collapse components panel">
+          <PanelLeftClose size={15} />
+        </button>
       </div>
       {GROUPS.map(({ kind, label }) => {
         const all: Item[] = kind === "quality" ? [QUALITY_ITEM] : catalog.components[kind];
@@ -207,7 +142,7 @@ export function Palette({ catalog, width, onResize }: { catalog: Catalog; width:
         );
       })}
       {hover && <DetailsCard hover={hover} catalog={catalog} />}
-      <ResizeHandle width={width} onResize={(w) => { hide(); onResize(w); }} />
+      <ResizeHandle panel={PALETTE} size={width} edge="right" label="Resize components panel" onResize={(w) => { hide(); onResize(w); }} />
     </aside>
   );
 }
