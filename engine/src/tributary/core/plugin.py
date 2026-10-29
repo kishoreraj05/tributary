@@ -44,6 +44,9 @@ class Plugin(ABC):
     spark_conf: ClassVar[dict[str, str]] = {}
     # Connection types (besides type_name itself) this plugin can take settings from; "*" = any.
     accepts_connections: ClassVar[tuple[str, ...]] = ()
+    # Internal plugins (the local environment's dummy source and sink) are valid in specs but
+    # are not offered in the component catalog: nodes become them, nobody picks them.
+    hidden: ClassVar[bool] = False
 
     def required_packages(self, opts: Any) -> list[str]:
         return list(self.spark_packages)

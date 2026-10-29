@@ -51,8 +51,7 @@ engine/.venv/bin/tributary run examples/csv_to_parquet.yaml
 
 Requires Java 8/11/17 and Python 3.10–3.12, which is what PySpark 3.5 supports. The Iceberg runtime defaults to 1.6.1 for the same reason (newer releases need Java 11+; pick one with `TRIBUTARY_ICEBERG_VERSION`).
 
-For Kafka, Postgres, MongoDB, MinIO and the Prometheus Pushgateway:
-`docker compose -f deploy/docker-compose.yml up -d`, then see [`examples/kafka_to_parquet.yaml`](examples/kafka_to_parquet.yaml). Elasticsearch and a mock REST API are opt-in: `up -d elasticsearch mock-api`. Connector guides: [MongoDB](docs/mongodb.md), [Elasticsearch](docs/ES_AS_A_SOURCE.md), [Delta](docs/DELTA_AS_A_SOURCE.md), [Hudi](docs/HUDI_AS_A_SOURCE.md), [Iceberg](docs/iceberg-source.md), [REST](docs/REST_AS_A_SOURCE.md).
+**Working locally:** every pipeline can have a `local` environment, where each source can stand in with uploaded dummy data (JSON Lines, up to 1,000 records) and each sink can be a dummy that writes nothing, so a pipeline previews end to end with nothing running. For real systems, `python3 scripts/local_services.py up mongodb kafka` (or `up all`, or `up --pipeline FILE`) starts only the Docker services those connectors need and prints their connection settings. See [`docs/local-development.md`](docs/local-development.md). Connector guides: [MongoDB](docs/mongodb.md), [Elasticsearch](docs/ES_AS_A_SOURCE.md), [Delta](docs/DELTA_AS_A_SOURCE.md), [Hudi](docs/HUDI_AS_A_SOURCE.md), [Iceberg](docs/iceberg-source.md), [REST](docs/REST_AS_A_SOURCE.md).
 
 ## A pipeline
 

@@ -106,7 +106,7 @@ def test_dynamic_mapping_adds_fields_strict_refuses_them_false_ignores_them(elas
     assert field_types(index) == {"id": "long", "extra": "text"}
 
     es("PUT", f"/{index}-strict", {"mappings": {"dynamic": "strict", "properties": {"id": {"type": "long"}}}})
-    with pytest.raises(Exception, match="strict_dynamic_mapping_exception: mapping set to strict, dynamic introduction of \\[extra\\]"):
+    with pytest.raises(Exception, match=r"strict_dynamic_mapping_exception: (\[\d+:\d+\] )?mapping set to strict, dynamic introduction of \[extra\]"):
         write(elasticsearch_spark, elasticsearch_spark.sql("SELECT 2 AS id, 'x' AS extra"), index=f"{index}-strict", id_column="id")
 
     es("PUT", f"/{index}-false", {"mappings": {"dynamic": False, "properties": {"id": {"type": "long"}}}})

@@ -13,8 +13,11 @@ def messages(exc: SpecError) -> str:
 @pytest.mark.parametrize("name,env", [("csv_to_parquet.yaml", None), ("kafka_to_parquet.yaml", "dev"),
                                       ("kafka_to_parquet.yaml", "prod"), ("file_stream_to_parquet.yaml", None),
                                       ("csv_to_delta.yaml", None), ("file_stream_to_delta.yaml", None),
-                                      ("rest_api_to_parquet.yaml", None), ("rest_api_enrichment.yaml", None),
-                                      ("rest_api_local_test.yaml", None), ("rest_api_enrichment_local_test.yaml", None)])
+                                      ("rest_api_to_parquet.yaml", "dev"), ("rest_api_to_parquet.yaml", "local"),
+                                      ("rest_api_enrichment.yaml", None),
+                                      ("rest_api_local_test.yaml", None), ("rest_api_enrichment_local_test.yaml", None),
+                                      ("mongodb_to_parquet.yaml", "local"), ("elasticsearch_dummy_data.yaml", "local"),
+                                      ("delta_to_parquet.yaml", "local")])
 def test_examples_compile(name, env):
     compiled = compile_pipeline(EXAMPLES / name, env)
     assert compiled.spec.sinks

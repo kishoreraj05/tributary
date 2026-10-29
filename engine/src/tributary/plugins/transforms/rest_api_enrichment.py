@@ -12,38 +12,88 @@ import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Iterator
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator
 from pyspark import StorageLevel
 from pyspark.sql import DataFrame, functions as F
 from pyspark.sql.types import ArrayType, StringType, StructField, StructType
 
-from ...core import Transform
+from ...core import PluginOptions, Transform
 from ...errors import TributaryError
 from .._rest import (
     PATH_PLACEHOLDER,
     Concurrency,
     DynamicInput,
+    Endpoint,
     HttpClient,
     HttpConfig,
     ParsingConfig,
     RestApiError,
     RestOptionsBase,
     body_as_json,
+    normalise_records,
     param_text,
     parse_records,
     render_template,
     render_url,
     template_columns,
 )
+from .._util import when
 from ..sources.rest_api import record_struct, records_frame
 
 _RECORDS = "_rest_records_"  # the response of a row, as a JSON array of records
 _RECORD = "_rest_record_"
+# The dummy dump is typed into a form and shipped inside the spec: keep it a sample, not a dataset.
+MAX_DUMMY_RECORDS = 100
 
 
-class RestApiEnrichmentOptions(RestOptionsBase):
+class _DummyResponses(PluginOptions):
+    """``useDummyData`` turns the node into a stand-in: it never contacts the API, the
+    ``dummyData`` dump is what it "returns" for every row, so the endpoint is not even needed."""
+
+    model_config = RestOptionsBase.model_config
+
+    use_dummy_data: bool = Field(
+        False,
+        alias="useDummyData",
+        validation_alias=AliasChoices("useDummyData", "use_dummy_data", "dummyDataFlag", "dummy_data_flag"),
+        description="Pretend to be the API: never connect to it and hand dummyData to the downstream nodes instead",
+    )
+    dummy_data: list[Any] = Field(
+        default_factory=list,
+        validate_default=True,
+        alias="dummyData",
+        description=f"JSON array of up to {MAX_DUMMY_RECORDS} records, as the API would return them after parsing. With useDummyData off it still tells deep validation the columns when no schema is declared",
+        json_schema_extra={"format": "json", "maxItems": MAX_DUMMY_RECORDS, **when("useDummyData", required=(True,))},
+    )
+
+    @field_validator("dummy_data", mode="after")
+    @classmethod
+    def _dummy_when_used(cls, value: list[Any], info: ValidationInfo) -> list[Any]:
+        if info.data.get("use_dummy_data") and not value:
+            raise ValueError("required when useDummyData is enabled (a JSON array of records)")
+        if len(value) > MAX_DUMMY_RECORDS:
+            raise ValueError(f"at most {MAX_DUMMY_RECORDS} dummy records ({len(value)} given)")
+        return value
+
+    def dummy_records(self) -> list[dict[str, Any]]:
+        return normalise_records(self.dummy_data, explode=True)
+
+
+# _DummyResponses is the last base so that its fields come first: pydantic validates in that
+# order, and the endpoint, optional here, reads use_dummy_data from ``info.data``.
+class RestApiEnrichmentOptions(RestOptionsBase, _DummyResponses):
+    endpoint: Endpoint | None = Field(
+        None, validate_default=True, json_schema_extra=when("useDummyData", required=(False,))
+    )
     dynamic_input: DynamicInput = Field(..., alias="dynamicInput")
     concurrency: Concurrency = Field(default_factory=Concurrency)
+
+    @field_validator("endpoint", mode="after")
+    @classmethod
+    def _endpoint_unless_dummy(cls, value: Endpoint | None, info: ValidationInfo) -> Endpoint | None:
+        if value is None and not info.data.get("use_dummy_data"):
+            raise ValueError("required unless useDummyData is enabled")
+        return value
 
 
 @dataclass(frozen=True)

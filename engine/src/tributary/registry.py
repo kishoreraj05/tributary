@@ -90,7 +90,7 @@ class Registry:
 
     def catalog(self) -> dict[str, list[dict[str, Any]]]:
         self.ensure_loaded()
-        return {c: [p.metadata() for _, p in sorted(self._plugins[c].items())] for c in CATEGORIES}
+        return {c: [p.metadata() for _, p in sorted(self._plugins[c].items()) if not p.hidden] for c in CATEGORIES}
 
 
 _default: Registry | None = None

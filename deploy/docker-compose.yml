@@ -2,6 +2,8 @@
 # results, MongoDB for the mongodb source/sink, and a Prometheus Pushgateway. MinIO (S3)
 # is behind the opt-in 's3' profile, Elasticsearch behind 'elasticsearch' and the mock
 # REST API behind 'rest' (or name the service: `up -d elasticsearch`).
+# scripts/local_services.py starts just the services a pipeline's connectors need; see
+# docs/local-development.md.
 services:
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7

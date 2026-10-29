@@ -1,6 +1,6 @@
 """What the REST API source and the REST API enrichment transform share.
 
-The options vocabulary (endpoint, parsing, concurrency, dummy data), the HTTP client with
+The options vocabulary (endpoint, parsing, concurrency), the HTTP client with
 its retries, keep-alive pool and token-bucket pacing, the response parser (response type,
 record extraction path, explode) and the ``${column}`` / ``{param}`` templating used to
 build a request from a row.
@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import requests
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from pydantic.fields import FieldInfo
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -44,8 +44,6 @@ COLUMN_PLACEHOLDER = re.compile(r"\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}")
 PATH_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 _RETRY_STATUSES = (429, 500, 502, 503, 504)
-# The dummy dump is typed into a form and shipped inside the spec: keep it a sample, not a dataset.
-MAX_DUMMY_RECORDS = 100
 
 
 class RestApiError(TributaryError):
@@ -237,29 +235,11 @@ class Concurrency(Section):
 
 class RestOptionsBase(PluginOptions):
     """Fields both REST plugins have. ``authType``/``token``/... are flat so a ``rest_api``
-    connection can provide them per environment (the backend encrypts token and password).
-
-    ``useDummyData`` turns the node into a stand-in: it never contacts the API, the
-    ``dummyData`` dump is what it "returns", so the endpoint is not even needed."""
+    connection can provide them per environment (the backend encrypts token and password)."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True, field_title_generator=_title)
 
-    use_dummy_data: bool = Field(
-        False,
-        alias="useDummyData",
-        validation_alias=AliasChoices("useDummyData", "use_dummy_data", "dummyDataFlag", "dummy_data_flag"),
-        description="Pretend to be the API: never connect to it and hand dummyData to the downstream nodes instead",
-    )
-    dummy_data: list[Any] = Field(
-        default_factory=list,
-        validate_default=True,
-        alias="dummyData",
-        description=f"JSON array of up to {MAX_DUMMY_RECORDS} records, as the API would return them after parsing. With useDummyData off it still tells deep validation the columns when no schema is declared",
-        json_schema_extra={"format": "json", "maxItems": MAX_DUMMY_RECORDS, **when("useDummyData", required=(True,))},
-    )
-    endpoint: Endpoint | None = Field(
-        None, validate_default=True, json_schema_extra=when("useDummyData", required=(False,))
-    )
+    endpoint: Endpoint = Field(...)
     parsing: Parsing = Field(default_factory=Parsing)
     base_url: str | None = Field(
         None, alias="baseUrl", description="Prefix for a relative endpoint.url; typically from a connection"
@@ -285,22 +265,6 @@ class RestOptionsBase(PluginOptions):
         json_schema_extra=when("authType", ("api_key",)),
     )
 
-    @field_validator("dummy_data", mode="after")
-    @classmethod
-    def _dummy_when_used(cls, value: list[Any], info: ValidationInfo) -> list[Any]:
-        if info.data.get("use_dummy_data") and not value:
-            raise ValueError("required when useDummyData is enabled (a JSON array of records)")
-        if len(value) > MAX_DUMMY_RECORDS:
-            raise ValueError(f"at most {MAX_DUMMY_RECORDS} dummy records ({len(value)} given)")
-        return value
-
-    @field_validator("endpoint", mode="after")
-    @classmethod
-    def _endpoint_unless_dummy(cls, value: Endpoint | None, info: ValidationInfo) -> Endpoint | None:
-        if value is None and not info.data.get("use_dummy_data"):
-            raise ValueError("required unless useDummyData is enabled")
-        return value
-
     @field_validator("token", "username", "password", mode="after")
     @classmethod
     def _auth_fields(cls, value: str | None, info: ValidationInfo) -> str | None:
@@ -311,7 +275,7 @@ class RestOptionsBase(PluginOptions):
 
     @property
     def full_url(self) -> str:
-        if self.endpoint is None:  # pretending: nothing is ever called
+        if self.endpoint is None:  # the enrichment pretending (useDummyData): nothing is ever called
             return ""
         url = self.endpoint.url
         if self.base_url and "://" not in url:
@@ -343,9 +307,6 @@ class RestOptionsBase(PluginOptions):
     def parsing_config(self) -> ParsingConfig:
         p = self.parsing
         return ParsingConfig(p.response_type, p.record_extraction_path, p.explode_array)
-
-    def dummy_records(self) -> list[dict[str, Any]]:
-        return normalise_records(self.dummy_data, explode=True)
 
 
 # --- HTTP ------------------------------------------------------------------------------

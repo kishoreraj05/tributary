@@ -1,15 +1,19 @@
-# Batch, needs no services at all: an Elasticsearch source in dummy mode stands in for the
-# 'orders' index with the documents listed below, so the pipeline can be drawn, previewed and
-# run before the index (or access to it) exists. Switch use_dummy_data off and attach a
-# connection (see elasticsearch_to_mongodb.yaml) to read the real index; nothing else changes.
-#   tributary preview examples/elasticsearch_dummy_data.yaml --node orders_clean
-#   tributary run examples/elasticsearch_dummy_data.yaml
+# Batch, needs no services at all in the local environment: there the Elasticsearch source's
+# dummy data (the JSON Lines below, up to 1000 records) stands in for the 'orders' index, so
+# the pipeline can be drawn, previewed and run before the index (or access to it) exists.
+#   tributary preview examples/elasticsearch_dummy_data.yaml -e local --node orders_clean
+#   tributary run examples/elasticsearch_dummy_data.yaml -e local
+# Any other environment ignores the dummy data and reads the real index (-e dev expects a
+# cluster at localhost:9200; elasticsearch_to_mongodb.yaml takes it from a connection).
 version: 1
 pipeline:
   id: orders_dummy
   mode: batch
 
 environments:
+  local:
+    vars:
+      out_dir: /tmp/tributary/orders_dummy
   dev:
     vars:
       out_dir: /tmp/tributary/orders_dummy
@@ -17,16 +21,18 @@ environments:
 sources:
   - id: orders_src
     type: elasticsearch
-    options:
-      use_dummy_data: true              # never contacts a cluster; nodes/index are not needed
-      include_metadata: true            # "_id" below becomes _metadata._id, as with a real index
-      dummy_data:                       # a JSON array works here too; 100 documents at most
-        - { _id: "1", order_id: 1, customer_id: 100, amount: 25.5, country: in, order_ts: "2026-10-01T10:00:00Z" }
-        - { _id: "2", order_id: 2, customer_id: 101, amount: 99.99, country: us, order_ts: "2026-10-01T11:30:00Z" }
-        - { _id: "3", order_id: 3, customer_id: 102, amount: -5.0, country: de, order_ts: "2026-10-01T12:00:00Z" }
-        - { _id: "4", order_id: 4, customer_id: 100, amount: 42.0, country: in, order_ts: "2026-10-02T09:15:00Z" }
-        - { customer_id: 103, amount: 10.0, country: fr, order_ts: "2026-10-02T10:45:00Z" }
-        - { _id: "6", order_id: 6, customer_id: 104, amount: 15.75, country: USA, order_ts: "2026-10-02T13:20:00Z" }
+    options:                            # what the real index needs; not used in the local environment
+      nodes: localhost:9200
+      index: orders
+    dummy:
+      enabled: true                     # local environment only: never contacts a cluster
+      data: |
+        {"order_id": 1, "customer_id": 100, "amount": 25.5, "country": "in", "order_ts": "2026-10-01T10:00:00Z"}
+        {"order_id": 2, "customer_id": 101, "amount": 99.99, "country": "us", "order_ts": "2026-10-01T11:30:00Z"}
+        {"order_id": 3, "customer_id": 102, "amount": -5.0, "country": "de", "order_ts": "2026-10-01T12:00:00Z"}
+        {"order_id": 4, "customer_id": 100, "amount": 42.0, "country": "in", "order_ts": "2026-10-02T09:15:00Z"}
+        {"customer_id": 103, "amount": 10.0, "country": "fr", "order_ts": "2026-10-02T10:45:00Z"}
+        {"order_id": 6, "customer_id": 104, "amount": 15.75, "country": "USA", "order_ts": "2026-10-02T13:20:00Z"}
     schema:                             # optional: fixes the types (dates stay strings otherwise)
       kind: ddl
       ddl: "order_id INT, customer_id INT, amount DOUBLE, country STRING, order_ts TIMESTAMP"
@@ -37,7 +43,7 @@ transforms:
     inputs: [{ node: orders_src, as: orders }]
     options:
       sql: |
-        SELECT _metadata['_id'] AS doc_id, order_id, customer_id, amount, upper(country) AS country, order_ts
+        SELECT order_id, customer_id, amount, upper(country) AS country, order_ts
         FROM orders
 
 quality:
@@ -60,4 +66,5 @@ sinks:
     input: orders_clean
 
 runtime:
+  local: { master: "local[*]" }
   dev: { master: "local[*]" }

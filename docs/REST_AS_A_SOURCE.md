@@ -6,8 +6,10 @@ start with Docker. The only extra piece is an API to call. This guide ships one:
 pipeline does (how many calls, which pages, which headers). It runs either as a plain Python
 script or as a service in the same `docker-compose.yml` (profile `rest`).
 
-Everything below calls the API for real. Dummy data (`useDummyData`) is not used here; it is
-covered in `engine/README.md`.
+Everything below calls the API for real. Dummy data is not used here: the source's comes from
+the `local` environment (toggle **Use Dummy Data** on the node and upload a JSON Lines file of
+up to 1000 records; see [local development](local-development.md)), and the enrichment
+transform keeps its own `useDummyData` / `dummyData` (see `engine/README.md`).
 
 What you will test:
 
@@ -204,7 +206,7 @@ Things to try: `concurrency.maxConcurrentCalls: 1` with the mock started with `-
 (the calls become strictly sequential, visible in the timestamps); add a student `99` to
 `students.csv` and set `dynamicInput.onError: null` (the row survives with nulls; with `fail`
 the run stops on the 404); remove `recordSchema` (the columns are then inferred from the
-responses; deep validation in the UI asks for a schema or dummy records, previews still work).
+responses; deep validation in the UI asks for a schema or the enrichment's `dummyData`, previews still work).
 
 ## 5. The backend API directly (optional)
 

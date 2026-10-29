@@ -10,6 +10,7 @@ from __future__ import annotations
 
 BUILTIN: dict[str, dict[str, str]] = {
     "source": {
+        "dummy": "tributary.plugins.sources.dummy:DummySource",
         "file": "tributary.plugins.sources.file:FileSource",
         "kafka": "tributary.plugins.sources.kafka:KafkaSource",
         "mongodb": "tributary.plugins.sources.mongodb:MongoDbSource",
@@ -27,6 +28,7 @@ BUILTIN: dict[str, dict[str, str]] = {
     "sink": {
         "file": "tributary.plugins.sinks.file:FileSink",
         "console": "tributary.plugins.sinks.console:ConsoleSink",
+        "dummy": "tributary.plugins.sinks.dummy:DummySink",
         "iceberg": "tributary.plugins.sinks.iceberg:IcebergSink",
         "delta": "tributary.plugins.sinks.delta:DeltaSink",
         "elasticsearch": "tributary.plugins.sinks.elasticsearch:ElasticsearchSink",

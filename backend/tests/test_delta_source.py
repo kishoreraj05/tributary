@@ -120,22 +120,22 @@ def test_change_feed_preview_shows_the_changes(client, orders_csv, tmp_path):
 
 
 def test_dummy_data_lets_the_editor_test_a_pipeline_without_the_table(client, tmp_path):
-    """use_dummy_data: the node produces its JSON records; the path is never contacted."""
+    """In the local environment the node's dummy data stands in: the path is never contacted."""
     nowhere = tmp_path / "nowhere"
-    doc = _from_delta(nowhere, tmp_path / "out", use_dummy_data=True, dummy_data=[
-        {"order_id": 1, "amount": 10.0, "country": "IN"}, {"order_id": 2, "amount": 5.0, "country": "GB"}, {"order_id": 3, "amount": 2.5, "country": "IN"}])
-    form = next(p for p in client.get("/api/v1/components").json()["components"]["source"] if p["type"] == "delta")["options_schema"]
-    assert form["properties"]["dummy_data"]["format"] == "json" and form["properties"]["dummy_data"]["maxItems"] == 100
+    doc = _from_delta(nowhere, tmp_path / "out")
+    doc["environments"] = {"local": doc["environments"]["dev"]}
+    doc["sources"][0]["dummy"] = {"enabled": True, "data": "\n".join([
+        '{"order_id": 1, "amount": 10.0, "country": "IN"}', '{"order_id": 2, "amount": 5.0, "country": "GB"}', '{"order_id": 3, "amount": 2.5, "country": "IN"}'])}
 
-    deep = client.post("/api/v1/validate", json={"spec": doc, "env": "dev", "deep": True}).json()
+    deep = client.post("/api/v1/validate", json={"spec": doc, "env": "local", "deep": True}).json()
     assert deep["valid"] is True, deep
-    assert [f["name"] for f in deep["nodes"]["orders_src"]["schema"]["fields"]] == ["order_id", "amount", "country"]
-    preview = client.post("/api/v1/preview", json={"spec": doc, "env": "dev", "node_id": "by_country", "limit": 10}).json()
+    assert sorted(f["name"] for f in deep["nodes"]["orders_src"]["schema"]["fields"]) == ["amount", "country", "order_id"]
+    preview = client.post("/api/v1/preview", json={"spec": doc, "env": "local", "node_id": "by_country", "limit": 10}).json()
     assert {r["country"]: (r["orders"], r["amount"]) for r in preview["rows"]} == {"IN": (2, 12.5), "GB": (1, 5.0)}
     assert not nowhere.exists()
 
-    doc["sources"][0]["options"]["dummy_data"] = [{"order_id": i} for i in range(101)]
-    body = client.post("/api/v1/validate", json={"spec": doc, "env": "dev"}).json()
+    doc["sources"][0]["dummy"]["data"] = [{"order_id": i} for i in range(1001)]
+    body = client.post("/api/v1/validate", json={"spec": doc, "env": "local"}).json()
     assert body["valid"] is False
     assert [(i["node_id"], i["path"], i["message"]) for i in body["issues"]] == [
-        ("orders_src", "sources[0].options.dummy_data", "at most 100 records (101 given)")]
+        ("orders_src", "sources[0].dummy.data", "at most 1000 records (1001 given)")]

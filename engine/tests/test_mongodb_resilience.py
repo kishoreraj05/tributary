@@ -302,22 +302,6 @@ def test_source_policy_for_documents_that_do_not_fit_the_declared_schema(mongodb
         MongoDbSourceOptions(connection_uri=MONGODB_URI, database=DB, collection=collection, on_malformed="ignore")
 
 
-def test_dummy_data_follows_the_same_malformed_policy(spark):
-    records = [{"id": 1, "amount": 10.0}, {"id": 2, "amount": "oops"}]
-    schema = {"kind": "ddl", "ddl": "id INT, amount DOUBLE"}
-
-    def doc(on_malformed: str) -> dict:
-        return {"pipeline": {"id": "drift", "mode": "batch"},
-                "sources": [{"id": "src", "type": "mongodb", "schema": schema, "options": {"use_dummy_data": True, "dummy_data": records, "on_malformed": on_malformed}}],
-                "sinks": [{"id": "out", "type": "console", "input": "src"}]}
-
-    rows = lambda d: sorted((r["id"], r["amount"]) for r in preview(d, "src", spark=spark).rows)  # noqa: E731
-    assert rows(doc("drop")) == [(1, 10.0)]
-    assert rows(doc("null"))[0] == (1, 10.0) and rows(doc("null"))[1][1] is None
-    with pytest.raises(Exception, match="(?i)malformed"):
-        rows(doc("fail"))
-
-
 # =========================================================================================
 # 3. Connection resiliency and network flakiness
 # =========================================================================================

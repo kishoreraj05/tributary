@@ -1,7 +1,8 @@
 # Batch: a Delta Lake table -> SQL -> Parquet, with time travel at hand.
 # Reads the table csv_to_delta.yaml writes, so run that one first. Then, from the repository root:
-#   tributary preview examples/delta_to_parquet.yaml --node orders_src
-#   tributary run examples/delta_to_parquet.yaml
+#   tributary preview examples/delta_to_parquet.yaml -e dev --node orders_src
+#   tributary run examples/delta_to_parquet.yaml -e dev
+# No table yet? Use -e local: there the source's dummy data stands in and the table is never read.
 #
 # The table carries its own schema, so the source needs none: the editor and `validate --deep`
 # read the columns from the table's log. Declaring one (schema: { kind: ddl, ... }) turns it
@@ -17,6 +18,10 @@ environments:
     vars:
       lake_dir: /tmp/tributary/lake
       out_dir: /tmp/tributary/delta_to_parquet
+  local:
+    vars:
+      lake_dir: /tmp/tributary/lake
+      out_dir: /tmp/tributary/delta_to_parquet
 
 sources:
   - id: orders_src
@@ -25,10 +30,11 @@ sources:
       path: "${env.lake_dir}/orders"
       # version: 0                  # time travel: the table as it was at a version...
       # timestamp: "2026-10-01"     # ...or at a time (batch reads only)
-      # use_dummy_data: true        # pretend: produce dummy_data (up to 100 records) and never read the table,
-      # dummy_data:                 # to draw and test the pipeline before the table exists
-      #   - { order_id: 1, customer_id: 100, amount: 25.5, country: IN, order_ts: "2026-10-01 10:00:00" }
-      #   - { order_id: 2, customer_id: 101, amount: 99.99, country: US, order_ts: "2026-10-01 11:30:00" }
+    dummy:                          # local environment only: these records instead of the table
+      enabled: true
+      data: |
+        {"order_id": 1, "customer_id": 100, "amount": 25.5, "country": "IN", "order_ts": "2026-10-01 10:00:00"}
+        {"order_id": 2, "customer_id": 101, "amount": 99.99, "country": "US", "order_ts": "2026-10-01 11:30:00"}
 
 transforms:
   - id: customer_totals
@@ -51,3 +57,4 @@ sinks:
 
 runtime:
   dev: { master: "local[*]", resources: auto }
+  local: { master: "local[*]", resources: auto }

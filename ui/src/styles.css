@@ -189,6 +189,8 @@ label { display: block; font-size: 12px; font-weight: 550; color: var(--text-2);
 .callout.danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 30%, transparent); color: var(--danger); }
 .callout.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); color: var(--text-2); }
 .callout.warn > svg { color: var(--warn); }
+.callout.info { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--text-2); }
+.callout.info > svg { color: var(--accent); }
 .callout ul { margin: 4px 0 0; padding-left: 18px; }
 
 .pill {
@@ -467,6 +469,7 @@ body.resizing-rows * { cursor: row-resize !important; }
   font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
   background: var(--surface-3); color: var(--muted);
 }
+.node .tag.dummy { color: var(--warn); background: var(--warn-soft); text-transform: uppercase; letter-spacing: 0.05em; }
 .node .tag.kind { color: color-mix(in srgb, var(--c) 62%, var(--text)); background: color-mix(in srgb, var(--c) 12%, var(--surface)); text-transform: uppercase; letter-spacing: 0.05em; }
 .node .badge {
   position: absolute; top: -9px; right: -9px; display: inline-flex; align-items: center; gap: 3px;
@@ -569,3 +572,24 @@ table.grid tr.failing td { background: color-mix(in srgb, var(--danger) 6%, tran
 /* official marks (components/brands.tsx) keep their own colours */
 .brand { flex: none; display: block; }
 img.brand { object-fit: contain; border-radius: 22%; }
+
+/* dummy data (local environment) */
+.dummy-box {
+  margin: 4px 0 16px; padding: 12px; border-radius: var(--radius);
+  border: 1px dashed color-mix(in srgb, var(--warn) 55%, var(--border)); background: color-mix(in srgb, var(--warn-soft) 60%, var(--surface));
+}
+.dummy-box textarea { width: 100%; font-size: 11.5px; line-height: 1.5; resize: vertical; }
+.switch { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; margin: 0; font-weight: 400; color: var(--text); }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track {
+  flex: none; position: relative; width: 32px; height: 18px; margin-top: 1px; border-radius: 999px;
+  background: var(--border-strong); transition: background 0.15s;
+}
+.switch .track::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 0.15s;
+}
+.switch input:checked + .track { background: var(--warn); }
+.switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch .desc { display: block; margin-top: 2px; }

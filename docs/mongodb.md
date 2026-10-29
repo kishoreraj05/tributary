@@ -1,7 +1,7 @@
 # MongoDB in Tributary: using and testing it locally
 
 Tributary can write to MongoDB (the `mongodb` **sink**) and read from it (the `mongodb`
-**source**, which can also stand in for a collection with pasted dummy data). Both go through
+**source**). Both go through
 the official [MongoDB Spark Connector](https://www.mongodb.com/docs/spark-connector/) (10.5.0,
 fetched from Maven Central on first use) and need nothing else: no catalog, no SQL extension,
 no session setting.
@@ -117,11 +117,14 @@ plus `database`, `collection`, an optional aggregation `pipeline` (JSON array of
 on the server), `on_malformed` (what to do with a document that does not fit the declared
 schema: `null` the field, `drop` the document, `fail`) and `read_options`.
 
-Tick **Use Dummy Data** and the node never connects: paste a JSON array of up to 100
-documents in *Dummy Data* and they flow downstream as if read from a collection (nested
-documents become structs, so `customer.tier` works in SQL). This is how to draw and test a
-pipeline before the real collection exists. [`examples/mongodb_to_parquet.yaml`](../examples/mongodb_to_parquet.yaml)
-runs entirely on dummy data: `engine/.venv/bin/tributary run examples/mongodb_to_parquet.yaml`.
+To pretend, select the `local` environment and toggle **Use Dummy Data** on the node: upload
+a JSON Lines file (one document per line, up to 1000) and the node never connects; the
+documents flow downstream as if read from a collection (nested documents become structs, so
+`customer.tier` works in SQL). Every other environment ignores the toggle and reads the real
+collection. A sink has the same toggle: it writes nothing, and its Preview shows the rows it
+would have received. [`examples/mongodb_to_parquet.yaml`](../examples/mongodb_to_parquet.yaml)
+runs on dummy data with `engine/.venv/bin/tributary run examples/mongodb_to_parquet.yaml -e local`
+(see [local development](local-development.md)).
 
 ## 5. Run the tests
 
@@ -138,7 +141,7 @@ cd engine
 | File | What it covers |
 |---|---|
 | `test_mongodb.py` | sink options and form hints, credentials never in logs, writer options per mode, design-time checks, real writes for append/overwrite/upsert (replace and update), `_id` columns, nested data, streaming micro-batches |
-| `test_mongodb_source.py` | source options, dummy data (limits, JSON parsing, schema typing, analysis), real reads with an aggregation pipeline |
+| `test_mongodb_source.py` | source options, real reads with an aggregation pipeline (dummy data in the local environment: `test_local_dummy.py`) |
 | `test_mongodb_resilience.py` | **idempotency** (a micro-batch replayed after a crash, a partial write retried, batch re-runs), **schema** (new fields, type drift flagged at design time, `on_malformed` policies), **resiliency** (writes that wait for a server that comes back, retry budgets, a running stream surviving an outage, through a cut-able TCP proxy) |
 
 They use their own database, `tributary_tests`, with a fresh collection per test. The whole

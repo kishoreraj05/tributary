@@ -155,38 +155,32 @@ def test_http_errors_are_retried_then_reported(spark, api, calls):
         RestApiSource().read(ctx(spark), source_opts(api, "/students/99/grades"), None)
 
 
-def test_use_dummy_data_pretends_to_be_the_api(spark, api, calls, tmp_path):
-    dummy = [{"roll_no": 7, "name": "Dummy"}, {"roll_no": 8, "name": "Data"}]
-    opts = source_opts(api, "/students/99/grades", useDummyData=True, dummyData=dummy)  # the API would 404
-    df = RestApiSource().read(ctx(spark), opts, None)
-    assert [(r.roll_no, r.name) for r in df.collect()] == [(7, "Dummy"), (8, "Data")]
-    assert calls.calls == []
-
-    # No endpoint at all: the node is a pure stand-in, and the whole pipeline runs on the dump.
+def test_local_dummy_data_stands_in_for_the_api(spark, api, calls, tmp_path):
+    """No endpoint at all: in the local environment the node's dummy data is what the
+    pipeline reads, and the API is never called."""
     doc = pipeline(tmp_path, tmp_path / "unused.csv")
-    doc["sources"] = [{"id": "students", "type": "rest_api", "options": {"useDummyData": True, "dummyData": dummy}}]
+    doc["environments"] = {"local": doc["environments"]["dev"]}
+    doc["sources"] = [{"id": "students", "type": "rest_api", "options": {},
+                       "dummy": {"enabled": True, "data": '{"roll_no": 7, "name": "Dummy"}\n{"roll_no": 8, "name": "Data"}'}}]
     doc["transforms"][0] = {"id": "upper", "type": "sql", "inputs": ["students"], "options": {"sql": "SELECT roll_no, upper(name) AS name FROM students"}}
     doc["sinks"][0]["input"] = "upper"
-    assert RestApiSource.Options.model_validate(doc["sources"][0]["options"]).endpoint is None
-    report = analyze(compile_pipeline(doc), spark=spark)
+    report = analyze(compile_pipeline(doc, env="local"), spark=spark)
     assert all(a.ok for a in report.values())
-    run(doc, spark=spark)
+    run(doc, env="local", spark=spark)
     rows = spark.read.parquet(str(tmp_path / "out" / "orders")).collect()
     assert sorted((r.roll_no, r.name) for r in rows) == [(7, "DUMMY"), (8, "DATA")]
     assert calls.calls == []
-    assert preview(doc, "students", spark=spark, limit=1).rows == [{"name": "Dummy", "roll_no": 7}]
+    assert preview(doc, "students", env="local", spark=spark, limit=1).rows == [{"name": "Dummy", "roll_no": 7}]
 
 
-def test_dummy_data_rules():
-    with pytest.raises(ValueError, match="required when useDummyData is enabled"):
+def test_only_the_enrichment_has_its_own_dummy_data():
+    with pytest.raises(ValueError, match=r"endpoint\n  Field required"):
+        RestApiSource.Options.model_validate({})
+    with pytest.raises(ValueError, match=r"useDummyData\n  Extra inputs are not permitted"):
         RestApiSource.Options.model_validate({"endpoint": {"url": "http://x"}, "useDummyData": True})
-    with pytest.raises(ValueError, match=r"endpoint\n.*required unless useDummyData is enabled"):
-        RestApiSource.Options.model_validate({"dummyData": [{"a": 1}]})
-    with pytest.raises(ValueError, match=r"at most 100 dummy records \(101 given\)"):
-        RestApiSource.Options.model_validate({"useDummyData": True, "dummyData": [{"a": 1}] * 101})
-    assert len(RestApiSource.Options.model_validate({"useDummyData": True, "dummyData": [{"a": 1}] * 100}).dummy_data) == 100
-    # the flag's earlier spelling is still understood
-    assert RestApiSource.Options.model_validate({"dummyDataFlag": True, "dummyData": [{"a": 1}]}).use_dummy_data
+    assert RestApiEnrichment.Options.model_validate(
+        {"useDummyData": True, "dummyData": [{"a": 1}], "dynamicInput": {"parameterMapping": {}}}
+    ).endpoint is None
 
 
 def test_source_in_a_pipeline_with_deep_validation(spark, api, calls, tmp_path):
@@ -202,11 +196,6 @@ def test_source_in_a_pipeline_with_deep_validation(spark, api, calls, tmp_path):
     assert calls.calls == []  # a declared schema: deep validation never calls the API
 
     del doc["sources"][0]["schema"]
-    doc["sources"][0]["options"]["dummyData"] = [{"roll_no": 1, "name": "x", "dept": "CS"}]
-    report = analyze(compile_pipeline(doc), spark=spark)
-    assert report["cs"].ok and calls.calls == []  # dummy records tell the columns, even with the flag off
-
-    del doc["sources"][0]["options"]["dummyData"]
     report = analyze(compile_pipeline(doc), spark=spark)
     assert report["cs"].ok and calls.paths() == ["/students"]  # nothing declared: one call to learn the columns
 

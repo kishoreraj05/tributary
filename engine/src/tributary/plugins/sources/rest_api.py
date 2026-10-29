@@ -20,7 +20,7 @@ class RestApiSourceOptions(RestOptionsBase):
 
 
 class RestApiSource(Source, BatchReadable):
-    """A REST API returning JSON: one table of its records, with pagination; or a dummy data stand-in."""
+    """A REST API returning JSON: one table of its records, with pagination."""
 
     type_name = "rest_api"
     display_name = "REST API"
@@ -32,18 +32,15 @@ class RestApiSource(Source, BatchReadable):
 
     def read_preview(self, ctx, opts: RestApiSourceOptions, schema, limit: int):
         # limit=0 is deep validation asking for the columns only: no request is made when
-        # a schema or dummy records can answer that.
+        # a schema can answer that.
         return self._frame(ctx, opts, schema, limit=limit).limit(limit)
 
     def _frame(self, ctx, opts: RestApiSourceOptions, schema, limit: int | None) -> DataFrame:
         struct = record_struct(ctx.spark, schema, opts.parsing.record_schema)
-        if opts.use_dummy_data or (limit == 0 and opts.dummy_data):
-            records = opts.dummy_records()  # pretending: the API is never contacted
-        elif limit == 0 and struct is not None:
+        if limit == 0 and struct is not None:
             return ctx.spark.createDataFrame([], struct)
-        else:
-            records = fetch_records(opts, wanted=limit)
-            ctx.log.info("rest_api: %d records from %s", len(records), opts.full_url)
+        records = fetch_records(opts, wanted=limit)
+        ctx.log.info("rest_api: %d records from %s", len(records), opts.full_url)
         return records_frame(ctx.spark, records, struct)
 
     def estimate_input_bytes(self, opts: RestApiSourceOptions) -> int | None:

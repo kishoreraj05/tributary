@@ -30,6 +30,7 @@ tributary = "tributary.cli:app"
 # the same entry-point groups, without touching this project.
 # ---------------------------------------------------------------------------
 [project.entry-points."tributary.sources"]
+dummy = "tributary.plugins.sources.dummy:DummySource"
 file = "tributary.plugins.sources.file:FileSource"
 kafka = "tributary.plugins.sources.kafka:KafkaSource"
 mongodb = "tributary.plugins.sources.mongodb:MongoDbSource"
@@ -47,6 +48,7 @@ deequ = "tributary.plugins.transforms.deequ:DeequTransform"
 [project.entry-points."tributary.sinks"]
 file = "tributary.plugins.sinks.file:FileSink"
 console = "tributary.plugins.sinks.console:ConsoleSink"
+dummy = "tributary.plugins.sinks.dummy:DummySink"
 iceberg = "tributary.plugins.sinks.iceberg:IcebergSink"
 delta = "tributary.plugins.sinks.delta:DeltaSink"
 elasticsearch = "tributary.plugins.sinks.elasticsearch:ElasticsearchSink"

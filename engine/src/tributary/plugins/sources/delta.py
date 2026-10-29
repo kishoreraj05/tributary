@@ -23,20 +23,14 @@ Three ways to read:
 Like the sink, the source needs Delta's session catalog and nothing else (no SQL
 extension): it asks for it at session build and sets it on shared sessions (``_delta.py``).
 
-``use_dummy_data`` makes the node pretend: ``dummy_data`` (up to 100 JSON records) is what
-it produces, in batch, preview and streaming alike, and the table at ``path`` is never
-touched. A pipeline can be drawn and tested before the table exists or from a machine
-that cannot reach the lake. The records are parsed as JSON would be read from a file:
-with the declared schema when there is one, inferred otherwise (columns in the order the
-records use them).
+To work without the table, turn on the node's dummy data in the ``local`` environment (see
+``plugins/sources/dummy.py``).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, ValidationInfo, field_validator
 from pyspark.sql import DataFrame, functions as F
@@ -58,7 +52,6 @@ from .._util import OptionValue, spark_options, when
 ChangeHandling = Literal["fail", "ignore_deletes", "ignore_changes", "skip_commits"]
 _CHANGE_FLAGS = {"ignore_deletes": "ignoreDeletes", "ignore_changes": "ignoreChanges", "skip_commits": "skipChangeCommits"}
 LATEST = "latest"
-MAX_DUMMY_RECORDS = 100
 
 
 class DeltaSourceOptions(PluginOptions):
@@ -108,35 +101,9 @@ class DeltaSourceOptions(PluginOptions):
         default_factory=dict,
         description="Extra options for the Delta reader, e.g. maxBytesPerTrigger: 1g or withEventTimeOrder: true",
     )
-    use_dummy_data: bool = Field(
-        False,
-        description="Pretend: produce dummy_data instead of reading the table, which is never contacted. "
-        "For drawing and testing a pipeline before the table exists or away from the lake",
-    )
-    dummy_data: list[dict[str, Any]] = Field(
-        default_factory=list,
-        validate_default=True,
-        description=f"The records the node produces while use_dummy_data is on: a JSON array of at most "
-        f"{MAX_DUMMY_RECORDS} objects, e.g. [{{\"order_id\": 1, \"amount\": 9.5}}]. Parsed with the declared "
-        "schema when there is one, inferred otherwise",
-        json_schema_extra={
-            **when("use_dummy_data", applies=(True,), required=(True,)),
-            "format": "json",
-            "maxItems": MAX_DUMMY_RECORDS,
-        },
-    )
 
     # Field validators (not a model validator) so each error is reported on its own field,
     # which is where the UI shows it. ``info.data`` holds the fields declared above.
-
-    @field_validator("dummy_data", mode="after")
-    @classmethod
-    def _dummy_records(cls, value: list[dict[str, Any]], info: ValidationInfo) -> list[dict[str, Any]]:
-        if info.data.get("use_dummy_data") and not value:
-            raise ValueError("required when use_dummy_data is on: a JSON array of records")
-        if len(value) > MAX_DUMMY_RECORDS:
-            raise ValueError(f"at most {MAX_DUMMY_RECORDS} records ({len(value)} given)")
-        return value
 
     @field_validator("version", "timestamp", mode="after")
     @classmethod
@@ -191,13 +158,9 @@ class DeltaSource(Source, BatchReadable, StreamReadable):
     # -- batch -----------------------------------------------------------------------------
 
     def read(self, ctx, opts: DeltaSourceOptions, schema) -> DataFrame:
-        if opts.use_dummy_data:
-            return self._dummy_frame(ctx, opts, schema)
         return self._batch(ctx, opts, schema, sample=False)
 
     def read_preview(self, ctx, opts: DeltaSourceOptions, schema, limit: int) -> DataFrame:
-        if opts.use_dummy_data:
-            return self._dummy_frame(ctx, opts, schema).limit(limit)
         return self._batch(ctx, opts, schema, sample=True).limit(limit)
 
     def _batch(self, ctx, opts: DeltaSourceOptions, schema, *, sample: bool) -> DataFrame:
@@ -229,8 +192,6 @@ class DeltaSource(Source, BatchReadable, StreamReadable):
     # -- streaming -------------------------------------------------------------------------
 
     def read_stream(self, ctx, opts: DeltaSourceOptions, schema) -> DataFrame:
-        if opts.use_dummy_data:
-            return self._dummy_stream(ctx, opts, schema)
         if opts.version is not None or opts.timestamp:
             raise TributaryError(
                 "version/timestamp (time travel) apply to batch reads; a stream starts at starting_version or "
@@ -250,30 +211,6 @@ class DeltaSource(Source, BatchReadable, StreamReadable):
         if opts.max_files_per_trigger:
             reader = reader.option("maxFilesPerTrigger", opts.max_files_per_trigger)
         return self._project(reader.load(opts.path), opts, schema)
-
-    # -- dummy data ------------------------------------------------------------------------
-
-    def _dummy_frame(self, ctx, opts: DeltaSourceOptions, schema) -> DataFrame:
-        """The records as a DataFrame, read the way a JSON file would be: the declared
-        schema (plus the change feed columns, when pretending to be one) or an inferred
-        one. Spark sorts inferred columns by name; the records' own order is restored."""
-        ctx.log.info("delta source: using %d dummy records, the table at %s is not read", len(opts.dummy_data), opts.path)
-        lines = ctx.spark.sparkContext.parallelize([json.dumps(record) for record in opts.dummy_data], 1)
-        struct = self.output_schema(opts, schema)
-        if struct is not None:
-            return ctx.spark.read.schema(struct).json(lines)
-        df = ctx.spark.read.json(lines)
-        order = list(dict.fromkeys(key for record in opts.dummy_data for key in record))
-        return df.select(*[F.col(f"`{key}`") for key in order])
-
-    def _dummy_stream(self, ctx, opts: DeltaSourceOptions, schema) -> DataFrame:
-        """The same records as a stream: one micro-batch, then nothing. They are written
-        (by Spark, so on the session's file system, wherever it runs) to a scratch
-        directory that a file stream with the batch frame's schema then reads."""
-        batch = self._dummy_frame(ctx, opts, schema)
-        directory = os.path.join(tempfile.gettempdir(), "tributary-dummy", ctx.pipeline_id, ctx.run_id)
-        batch.coalesce(1).write.mode("overwrite").json(directory)
-        return ctx.spark.readStream.schema(batch.schema).json(directory)
 
     # -- schema ----------------------------------------------------------------------------
 
@@ -309,8 +246,6 @@ class DeltaSource(Source, BatchReadable, StreamReadable):
     def estimate_input_bytes(self, opts: DeltaSourceOptions) -> int | None:
         """Data files under a local table directory, the log excluded. Files of past versions
         not yet vacuumed are counted too, so this errs on the large side."""
-        if opts.use_dummy_data:
-            return len(json.dumps(opts.dummy_data).encode())
         path = opts.path.removeprefix("file://")
         if "://" in path or not os.path.isdir(os.path.join(path, "_delta_log")):
             return None

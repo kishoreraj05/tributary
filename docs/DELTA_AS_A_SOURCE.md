@@ -12,7 +12,7 @@ it on your machine with a Python venv, as in the main README.
 | **Streaming** | the table as it is, then every commit; `starting_version` / `starting_timestamp` move the start (`latest` = new commits only); `on_changes` decides what happens on commits that update or delete rows; `max_files_per_trigger` bounds a micro-batch |
 | **Change data feed** | `change_feed: true` reads the *changes* instead of the rows, with `_change_type`, `_commit_version`, `_commit_timestamp` columns (the table must record them: `delta.enableChangeDataFeed`, which the Delta sink sets via `write_options` when it creates a table) |
 | **Schema** | optional: the table has one, and the editor / `validate --deep` read it from the table's log. A declared `schema:` is a contract instead (those columns, cast to those types) and lets a pipeline be drawn before the table exists |
-| **Dummy data** | `use_dummy_data: true` + `dummy_data` (a JSON array of at most 100 records): the node produces those records and never contacts the table, in batch, preview and streaming |
+| **Dummy data** | in the `local` environment only: with the node's **Use Dummy Data** toggle on, it produces the uploaded JSON Lines records (up to 1000) and never contacts the table, in batch, preview and streaming ([local development](local-development.md)) |
 
 Tables are addressed by `path` (local, `s3a://`, `gs://`, `abfss://`, `hdfs://`). Like the
 Delta sink, the source needs only Delta's session catalog, which it sets itself; no SQL
@@ -24,7 +24,7 @@ Three example pipelines exercise it end to end; they share a lake directory
 | Example | What it shows |
 |---|---|
 | `examples/csv_to_delta.yaml` | *produces* the `orders` table (Delta sink, merge; change data feed on) |
-| `examples/delta_to_parquet.yaml` | batch read, time travel in comments, dummy data in comments |
+| `examples/delta_to_parquet.yaml` | batch read, time travel in comments, dummy data for `-e local` |
 | `examples/delta_changes_to_delta.yaml` | streaming change data capture: the feed of `orders` keeps an `orders_mirror` table current, deletes included |
 
 ## Running it locally (no Docker needed for Delta)
@@ -37,9 +37,10 @@ needed for the UI.
 T=engine/.venv/bin/tributary
 
 $T run      examples/csv_to_delta.yaml                       # creates /tmp/tributary/lake/orders (fetches the Delta jars once)
-$T validate examples/delta_to_parquet.yaml --deep            # columns read from the table's log
-$T preview  examples/delta_to_parquet.yaml --node orders_src --limit 5
-$T run      examples/delta_to_parquet.yaml                   # -> /tmp/tributary/delta_to_parquet/customer_totals
+$T validate examples/delta_to_parquet.yaml -e dev --deep     # columns read from the table's log
+$T preview  examples/delta_to_parquet.yaml -e dev --node orders_src --limit 5
+$T run      examples/delta_to_parquet.yaml -e dev            # -> /tmp/tributary/delta_to_parquet/customer_totals
+$T run      examples/delta_to_parquet.yaml -e local          # the same on the source's dummy data, no table read
 $T preview  examples/delta_changes_to_delta.yaml --node orders_changes     # the last commit's changes
 $T run      examples/delta_changes_to_delta.yaml             # mirror = orders (one commit per micro-batch)
 $T run      examples/csv_to_delta.yaml                       # change the source table again ...
@@ -67,21 +68,21 @@ The engine's tests of the source (21, local disk, no services) and the API tests
    (time travel) or `change_feed` (the changes of the last commit appear in the sample).
 4. **Run**: a version is created, a worker runs it; the run page shows logs and the quality
    results.
-5. **Dummy data**: on the source node tick `use_dummy_data`; a required `dummy_data` field
-   appears (edited as JSON), e.g.
+5. **Dummy data**: select the `local` environment, toggle **Use Dummy Data** on the source node
+   and upload a JSON Lines file (one record per line, up to 1000), e.g.
    ```json
-   [{"order_id": 1, "customer_id": 100, "amount": 25.5, "country": "IN", "order_ts": "2026-10-01 10:00:00"},
-    {"order_id": 2, "customer_id": 101, "amount": 99.99, "country": "US", "order_ts": "2026-10-01 11:30:00"}]
+   {"order_id": 1, "customer_id": 100, "amount": 25.5, "country": "IN", "order_ts": "2026-10-01 10:00:00"}
+   {"order_id": 2, "customer_id": 101, "amount": 99.99, "country": "US", "order_ts": "2026-10-01 11:30:00"}
    ```
-   Test any downstream node: it runs on those records; the `path` is never touched (the run log
-   says `using 2 dummy records, the table at ... is not read`). Untick to read the real table
-   again (the records are kept until you switch back).
+   Test any downstream node: it runs on those records; the `path` is never touched. Any other
+   environment ignores the toggle and reads the real table. A sink's toggle writes nothing and
+   lets its Preview show the rows it would receive.
 6. Streaming: set the pipeline mode to *streaming* (Pipeline settings: checkpoint location,
    trigger), mark the Delta node as the streaming source, and run; with `available_now` the run
    processes what is there and stops; with `processing_time` it keeps following commits.
 
-Mandatory fields carry a red star; `dummy_data` gets one as soon as `use_dummy_data` is on,
-`merge_keys` of the Delta sink as soon as its mode is `merge`.
+Mandatory fields carry a red star; `merge_keys` of the Delta sink gets one as soon as its mode
+is `merge`.
 
 ## Options
 
@@ -95,13 +96,12 @@ Mandatory fields carry a red star; `dummy_data` gets one as soon as `use_dummy_d
 | `on_changes` | `fail` | Streaming, commits that update/delete: `fail`, `ignore_deletes`, `ignore_changes` (re-emit rewritten files; pair with a merge sink), `skip_commits`. |
 | `max_files_per_trigger` | – | Streaming: files per micro-batch. |
 | `read_options` | – | Any other Delta reader option (`maxBytesPerTrigger`, `withEventTimeOrder`, ...). |
-| `use_dummy_data`, `dummy_data` | `false`, – | Pretend: produce the records (≤ 100) and never read the table. |
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `Path does not exist` / `is not a Delta table` in the editor or a preview | Nothing at `path` yet: run the producing pipeline first, or declare a `schema:` (or use dummy data) to work ahead of it. In Docker, the path is the container's: `/tmp/tributary/...` maps to `.lake/` on the host. |
+| `Path does not exist` / `is not a Delta table` in the editor or a preview | Nothing at `path` yet: run the producing pipeline first, or declare a `schema:` (or use dummy data in the `local` environment) to work ahead of it. In Docker, the path is the container's: `/tmp/tributary/...` maps to `.lake/` on the host. |
 | `DELTA_CONFIGURE_SPARK_SESSION_WITH_EXTENSION_AND_CATALOG` | Delta's session catalog is missing from a session the source did not build. The source sets it on any session it runs in, so this only appears if another setting holds `spark.sql.catalog.spark_catalog`; see the error message. |
 | `DELTA_MISSING_CHANGE_DATA` / `change data was not recorded` | `change_feed: true` on a table that does not record it. Create it with `write_options: { delta.enableChangeDataFeed: true }` (as `csv_to_delta.yaml` does) or `ALTER TABLE ... SET TBLPROPERTIES (delta.enableChangeDataFeed = true)` for commits from now on. |
 | `reading a change feed in batch needs starting_version or starting_timestamp` | Batch change-feed reads need a start; a stream does not. |
@@ -115,6 +115,6 @@ Mandatory fields carry a red star; `dummy_data` gets one as soon as `use_dummy_d
 
 | Checked | How |
 |---|---|
-| Batch reads, time travel, declared-schema contract, change feed in batch, previews and deep validation, streams (start positions, `latest`, `on_changes`), change-feed CDC into a merge table, dummy data in batch/preview/streaming | `engine/tests/test_delta_source.py` (21 tests, real Delta tables on local disk) |
+| Batch reads, time travel, declared-schema contract, change feed in batch, previews and deep validation, streams (start positions, `latest`, `on_changes`), change-feed CDC into a merge table | `engine/tests/test_delta_source.py` (21 tests, real Delta tables on local disk) |
 | The same through the API, including a run in a worker process whose session is built from what the source asks for | `backend/tests/test_delta_source.py` (6 tests) |
 | The three examples end to end through the CLI (native) | run while building this |

@@ -3,12 +3,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
 import pytest
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+# The sessions below use UTC as Spark's session time zone, and several tests compare
+# timestamps read back through Python or a connector (Elasticsearch dates, MongoDB dates,
+# Iceberg snapshot times) against UTC wall-clock values. Pin the process, and so the Spark
+# JVM it starts, to UTC as well, so the suite gives the same answer on any host time zone.
+os.environ["TZ"] = "UTC"
+time.tzset()
 
 
 def maven_jar(coordinate: str) -> Path | None:

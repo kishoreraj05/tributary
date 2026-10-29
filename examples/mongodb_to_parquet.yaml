@@ -1,21 +1,21 @@
-# Batch: a MongoDB collection -> SQL -> Parquet + console. As written, the source uses
-# dummy data, so it runs without any MongoDB server (nothing is downloaded either):
-#   tributary preview examples/mongodb_to_parquet.yaml --node orders_mongo
-#   tributary run examples/mongodb_to_parquet.yaml
+# Batch: a MongoDB collection -> SQL -> Parquet + console. In the local environment the
+# source's dummy data stands in for the collection, so it runs without any MongoDB server
+# (nothing is downloaded either):
+#   tributary preview examples/mongodb_to_parquet.yaml -e local --node orders_mongo
+#   tributary run examples/mongodb_to_parquet.yaml -e local
 #
-# To read a real collection instead, turn use_dummy_data off and fill in the connection
+# Any other environment ignores the dummy data and reads the collection in the options
 # (in the UI, a connection of type "mongodb" supplies connection_uri, username, password):
-#   options:
-#     connection_uri: mongodb://localhost:27017
-#     database: tributary
-#     collection: orders
-#     pipeline: '[{"$match": {"country": {"$in": ["in", "us"]}}}]'   # optional, runs on the server
+#   tributary run examples/mongodb_to_parquet.yaml -e dev
 version: 1
 pipeline:
   id: mongodb_orders
   mode: batch
 
 environments:
+  local:
+    vars:
+      out_dir: /tmp/tributary/mongodb_orders
   dev:
     vars:
       out_dir: /tmp/tributary/mongodb_orders
@@ -24,14 +24,19 @@ sources:
   - id: orders_mongo
     type: mongodb
     options:
-      use_dummy_data: true
-      # Up to 100 documents; the UI takes the same array as JSON text. Nested documents
-      # become structs (customer.tier below), arrays stay arrays.
-      dummy_data:
-        - { _id: a1, order_id: 1, amount: 25.5, country: in, order_ts: "2026-10-01T10:00:00Z", customer: { id: 100, tier: gold } }
-        - { _id: a2, order_id: 2, amount: 99.99, country: us, order_ts: "2026-10-01T11:30:00Z", customer: { id: 101, tier: silver } }
-        - { _id: a3, order_id: 3, amount: 7.0, country: in, order_ts: "2026-10-02T09:15:00Z", customer: { id: 100, tier: gold } }
-        - { _id: a4, order_id: 4, amount: 15.25, country: gb, order_ts: "2026-10-02T13:20:00Z", customer: { id: 102, tier: bronze } }
+      connection_uri: mongodb://localhost:27017
+      database: tributary
+      collection: orders
+      # pipeline: '[{"$match": {"country": {"$in": ["in", "us"]}}}]'   # optional, runs on the server
+    dummy:
+      # Local environment only: JSON Lines, one document per line (up to 1000; the editor
+      # uploads a .jsonl file). Nested documents become structs (customer.tier below).
+      enabled: true
+      data: |
+        {"_id": "a1", "order_id": 1, "amount": 25.5, "country": "in", "order_ts": "2026-10-01T10:00:00Z", "customer": {"id": 100, "tier": "gold"}}
+        {"_id": "a2", "order_id": 2, "amount": 99.99, "country": "us", "order_ts": "2026-10-01T11:30:00Z", "customer": {"id": 101, "tier": "silver"}}
+        {"_id": "a3", "order_id": 3, "amount": 7.0, "country": "in", "order_ts": "2026-10-02T09:15:00Z", "customer": {"id": 100, "tier": "gold"}}
+        {"_id": "a4", "order_id": 4, "amount": 15.25, "country": "gb", "order_ts": "2026-10-02T13:20:00Z", "customer": {"id": 102, "tier": "bronze"}}
     # Optional: without a schema the column types are inferred from the documents
     # (order_ts would be a string); declaring one types them for the real collection too.
     schema:
@@ -59,4 +64,5 @@ sinks:
     input: revenue_by_country
 
 runtime:
+  local: { master: "local[*]", resources: auto }
   dev: { master: "local[*]", resources: auto }

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from ..core.targets import target_fields
 from ..errors import PluginError, SpecError, SpecIssue
+from ..plugins._dummy import LOCAL_ENV, parse_records
 from ..registry import Registry, default_registry
 from .builder import build_spec_model
 from .loader import Interpolator, SecretResolver, load_document
@@ -55,6 +56,8 @@ def compile_pipeline(
     if issues:
         raise SpecError(issues)
 
+    warnings: list[str] = []
+    _apply_dummies(doc, env_name, issues, warnings)
     secrets = SecretResolver(registry) if resolve_secrets else None
     variables = Interpolator({}, secrets, issues).resolve(env_spec.vars, f"environments.{env_name}.vars")
     _merge_connections(doc, env_spec.connections, registry, issues)
@@ -69,12 +72,41 @@ def compile_pipeline(
     except ValidationError as exc:
         raise SpecError(_from_pydantic(exc, resolved)) from None
 
-    semantic_issues, warnings = validate_semantics(spec, registry)
+    semantic_issues, semantic_warnings = validate_semantics(spec, registry)
+    warnings += semantic_warnings
     if semantic_issues:
         raise SpecError(semantic_issues)
     if env_name not in spec.runtime and spec.runtime:
         warnings.append(f"no runtime settings for environment '{env_name}'; using defaults")
     return CompiledPipeline(spec=spec, env=env_name, registry=registry, warnings=warnings)
+
+
+def _apply_dummies(doc: dict[str, Any], env: str, issues: list[SpecIssue], warnings: list[str]) -> None:
+    """In the local environment, a source or sink with ``dummy.enabled`` becomes the dummy
+    plugin of its category, so its own options (and connection) are neither needed nor
+    checked: the source hands its uploaded records downstream, the sink writes nothing.
+    Everywhere else the setting is ignored and the node runs for real."""
+    for key, category in (("sources", "source"), ("sinks", "sink")):
+        for i, node in enumerate(doc.get(key) or []):
+            if not isinstance(node, dict) or not isinstance(node.get("dummy"), dict) or not node["dummy"].get("enabled"):
+                continue
+            if env != LOCAL_ENV:
+                warnings.append(f"{key}[{i}] ({node.get('id')}): dummy data is only used in the '{LOCAL_ENV}' environment")
+                continue
+            options: dict[str, Any] = {"stands_for": node.get("type") or ""}
+            if category == "source":
+                # Bad data is reported on the field, and the node is still swapped: its real
+                # options (and connection) are no more the problem than in a good dummy node.
+                try:
+                    options["records"] = parse_records(node["dummy"].get("data"))
+                except ValueError as exc:
+                    issues.append(SpecIssue(f"{key}[{i}].dummy.data", str(exc)))
+                    options["records"] = []
+                else:
+                    if not options["records"] and not node.get("schema"):
+                        issues.append(SpecIssue(f"{key}[{i}].dummy.data", "upload or paste at least one record (JSON Lines)"))
+            node.update(type="dummy", options=options)
+            node.pop("connection", None)
 
 
 def _select_env(doc: dict[str, Any], env: str | None, issues: list[SpecIssue]) -> tuple[str, EnvironmentSpec]:

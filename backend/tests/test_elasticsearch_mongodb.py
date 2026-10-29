@@ -109,10 +109,7 @@ def test_catalog_lists_both_with_their_forms(client):
     components = client.get("/api/v1/components").json()["components"]
     source = next(p for p in components["source"] if p["type"] == "elasticsearch")
     assert source["capabilities"] == ["batch"] and source["icon"] == "search"
-    props = source["options_schema"]["properties"]  # nodes/index are mandatory unless use_dummy_data is on
-    assert "required" not in source["options_schema"]
-    assert props["nodes"]["x-when"] == props["index"]["x-when"] == {"field": "use_dummy_data", "required_in": [False]}
-    assert props["dummy_data"]["x-when"] == {"field": "use_dummy_data", "in": [True], "required_in": [True]}
+    assert source["options_schema"]["required"] == ["nodes", "index"]
     sink = next(p for p in components["sink"] if p["type"] == "mongodb")
     assert sink["options_schema"]["required"] == ["connection_uri", "database", "collection"]
     assert sink["options_schema"]["properties"]["merge_keys"]["x-when"] == {"field": "mode", "in": ["upsert"], "required_in": ["upsert"]}
@@ -162,28 +159,23 @@ def test_elasticsearch_to_mongodb_from_connections_preview_and_run(client, order
 
 
 def test_dummy_data_previews_and_validates_without_any_cluster(client, tmp_path):
-    """The editor's flow with use_dummy_data on: no connection, no nodes, no index; the
-    documents typed into the form (JSON text) are what the node emits."""
-    doc = spec(tmp_path / "unused.csv", tmp_path / "out")
+    """The editor's flow in the local environment with the node's dummy data on: no
+    connection, no nodes, no index; the uploaded JSON Lines are what the node emits."""
+    doc = spec(tmp_path / "unused.csv", tmp_path / "out", environments={"local": {"vars": {"out": str(tmp_path / "out")}}})
     doc["sources"][0] = {
-        "id": "orders_src", "type": "elasticsearch",
-        "options": {
-            "use_dummy_data": True, "include_metadata": True,
-            "dummy_data": json.dumps([{"_id": "a", "order_id": 1, "amount": 2.5, "country": "in"}, {"order_id": 2, "amount": -1, "country": "us"}, {"amount": 3, "country": "de"}]),
-        },
+        "id": "orders_src", "type": "elasticsearch", "options": {},
+        "dummy": {"enabled": True, "data": "\n".join(json.dumps(d) for d in [
+            {"order_id": 1, "amount": 2.5, "country": "in"}, {"order_id": 2, "amount": -1, "country": "us"}, {"amount": 3, "country": "de"}])},
         "schema": {"kind": "ddl", "ddl": "order_id INT, amount DOUBLE, country STRING"},
     }
-    validated = client.post("/api/v1/validate", json={"spec": doc, "env": "dev", "deep": True}).json()
+    validated = client.post("/api/v1/validate", json={"spec": doc, "env": "local", "deep": True}).json()
     assert validated["valid"] is True, validated
-    assert [f["name"] for f in validated["nodes"]["orders_src"]["schema"]["fields"]] == ["order_id", "amount", "country", "_metadata"]
+    assert [f["name"] for f in validated["nodes"]["orders_src"]["schema"]["fields"]] == ["order_id", "amount", "country"]
 
-    preview = client.post("/api/v1/preview", json={"spec": doc, "env": "dev", "node_id": "orders_out", "limit": 10}).json()
+    preview = client.post("/api/v1/preview", json={"spec": doc, "env": "local", "node_id": "orders_out", "limit": 10}).json()
     assert [(r["order_id"], r["country"]) for r in preview["rows"]] == [(1, "IN")]  # the 'drop' gate removed the other two
 
-    # Problems land on the field: a malformed array, and the switch on without data.
-    doc["sources"][0]["options"]["dummy_data"] = "[1, 2]"
-    issues = client.post("/api/v1/validate", json={"spec": doc, "env": "dev"}).json()["issues"]
-    assert [(i["path"], i["node_id"]) for i in issues] == [("sources[0].options.dummy_data", "orders_src")]
-    del doc["sources"][0]["options"]["dummy_data"]
-    issues = client.post("/api/v1/validate", json={"spec": doc, "env": "dev"}).json()["issues"]
-    assert [(i["path"], i["message"]) for i in issues] == [("sources[0].options.dummy_data", "required when use_dummy_data is on")]
+    # A problem in the data lands on the field.
+    doc["sources"][0]["dummy"]["data"] = '{"order_id": 1}\n[1, 2]'
+    issues = client.post("/api/v1/validate", json={"spec": doc, "env": "local"}).json()["issues"]
+    assert [(i["path"], i["node_id"], i["message"]) for i in issues] == [("sources[0].dummy.data", "orders_src", "record 2 is not a JSON object")]

@@ -183,36 +183,28 @@ engine/.venv/bin/tributary run      examples/elasticsearch_to_mongodb.yaml -e de
 
 ## 4. Test without Elasticsearch (dummy data)
 
-For drawing and testing a pipeline before the index exists, the Elasticsearch node has a
-**Use Dummy Data** switch. When it is on, the node emits the documents you paste into
-**Dummy Data** (a JSON array, 100 documents at most) in previews *and* runs, never contacts
-a cluster, and does not even need the connector jar; the *Nodes*/*Index* fields stop being
-required. You can keep Elasticsearch stopped for this:
-
-```bash
-docker compose -f deploy/docker-compose.yml stop elasticsearch
-```
-
-In the UI: add an Elasticsearch node, tick **Use Dummy Data**, paste for example
+For drawing and testing a pipeline before the index exists, select the `local` environment
+and toggle **Use Dummy Data** on the Elasticsearch node, then upload a JSON Lines file (one
+document per line, up to 1000), for example
 
 ```json
-[
-  {"_id": "d1", "order_id": 1, "customer_id": 100, "amount": 25.5, "country": "in"},
-  {"_id": "d2", "order_id": 2, "customer_id": 101, "amount": 99.99, "country": "us"},
-  {"order_id": 3, "customer_id": 102, "amount": -5, "country": "de"}
-]
+{"order_id": 1, "customer_id": 100, "amount": 25.5, "country": "in"}
+{"order_id": 2, "customer_id": 101, "amount": 99.99, "country": "us"}
+{"order_id": 3, "customer_id": 102, "amount": -5, "country": "de"}
 ```
 
-tick *Include Metadata* if you want `_metadata['_id']` (a document's `"_id"` becomes it),
-wire a SQL node and a sink, and **Test** / **Run** as before. Types are inferred from the
-values like an index mapping would (numbers, strings, booleans, nested objects, arrays);
-add a *Schema* to the node to fix them (dates stay strings otherwise). Switch it off again
-and pick a connection to read the real index; the pasted documents are kept but ignored.
+In `local` the node emits those records in previews *and* runs, never contacts a cluster
+and needs neither its options nor a connection (nor the connector jar), so Elasticsearch can
+stay stopped (`docker compose -f deploy/docker-compose.yml stop elasticsearch`). Types are
+inferred from the values like JSON; add a *Schema* to the node to fix them (dates stay strings
+otherwise). Any other environment ignores the toggle and reads the real index. The MongoDB
+sink has the same toggle: it writes nothing, and its Preview shows the rows it would receive.
+See [local development](local-development.md).
 
 From the CLI, `examples/elasticsearch_dummy_data.yaml` is the same thing with no services:
 
 ```bash
-engine/.venv/bin/tributary run examples/elasticsearch_dummy_data.yaml
+engine/.venv/bin/tributary run examples/elasticsearch_dummy_data.yaml -e local
 ```
 
 ## 5. Automated tests
@@ -239,7 +231,7 @@ docker-compose Postgres.
 | `_metadata` not found in SQL | Tick *Include Metadata* on the source node (under *More options*). |
 | Elasticsearch container exits right away | Usually memory: it needs ~1 GB; on Linux also `sysctl -w vm.max_map_count=262144`. |
 | `id_fields not in the data` on the MongoDB node | The upsert key must be a column of the incoming SQL; the editor shows this under *Id Fields* while you type. |
-| Run log says `uses dummy data … no cluster is contacted` but you expected real data | *Use Dummy Data* is still on for that node. |
+| Run log says `elasticsearch source uses … dummy records (local environment)` but you expected real data | The run is in the `local` environment with *Use Dummy Data* on for that node: pick another environment or turn the toggle off. |
 
 ## 7. Clean up
 

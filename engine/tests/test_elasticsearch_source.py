@@ -93,9 +93,10 @@ def test_options_are_validated():
     assert ElasticsearchSourceOptions(nodes="es", index="o", query="  ").query is None
     assert ElasticsearchSourceOptions(nodes="${secret:es/nodes}", index="o", query="${env.query}").query == "${env.query}"
     for bad, message in [
-        ({"index": "orders"}, "nodes\n  Value error, required unless use_dummy_data is on"),
-        ({"nodes": "es"}, "index\n  Value error, required unless use_dummy_data is on"),
-        ({"nodes": " ", "index": "o"}, "required unless use_dummy_data is on"),
+        ({"index": "orders"}, "nodes\n  Field required"),
+        ({"nodes": "es"}, "index\n  Field required"),
+        ({"nodes": " ", "index": "o"}, "nodes\n  Value error, required"),
+        ({"nodes": "es", "index": "o", "use_dummy_data": True}, "Extra inputs are not permitted"),
         ({"nodes": "es", "index": "o", "query": "country:us"}, "must be a URI query starting with"),
         ({"nodes": "es", "index": "o", "query": '{"query": }'}, "not valid JSON"),
         ({"nodes": "es", "index": "o", "scroll_size": 0}, "greater than or equal to 1"),
@@ -244,82 +245,31 @@ def test_preview_is_bounded(es_spark, tmp_path, orders_index):
     assert len(result.rows) == 2 and set(result.rows[0]) == {"amount", "country", "order_id", "order_ts", "tags"}
 
 
-# --- dummy data: no cluster at all ---------------------------------------------------------
+# --- dummy data in the local environment: no cluster at all --------------------------------
 
 DUMMY = [
-    {"_id": "a1", "order_id": 1, "amount": 10.0, "country": "in", "tags": ["new", "web"], "address": {"city": "Pune"}},
-    {"_id": "a2", "order_id": 2, "amount": -1.0, "country": "us", "tags": ["web"]},
+    {"order_id": 1, "amount": 10.0, "country": "in", "tags": ["new", "web"]},
+    {"order_id": 2, "amount": -1.0, "country": "us", "tags": ["web"]},
     {"amount": 5.0, "country": "de", "tags": []},
-    {"order_id": 4, "amount": 7.5, "country": "USA", "order_ts": "2026-10-02T13:20:00Z"},
+    {"order_id": 4, "amount": 7.5, "country": "USA"},
     {"order_id": 5, "amount": 3.0, "country": "gb"},
 ]
-NOWHERE = "nowhere.invalid:1"  # any attempt to contact a cluster would fail loudly
 
 
-def dummy_pipeline(tmp_path, **options) -> dict:
-    return es_pipeline(tmp_path, "orders", nodes=NOWHERE, use_dummy_data=True, dummy_data=DUMMY, **options)
+def dummy_pipeline(tmp_path) -> dict:
+    """An Elasticsearch source with no cluster settings at all, standing in with DUMMY."""
+    doc = pipeline(tmp_path, tmp_path, sources=[{
+        "id": "orders_src", "type": "elasticsearch", "options": {},
+        "schema": {"kind": "ddl", "ddl": "order_id INT, amount DOUBLE, country STRING"},
+        "dummy": {"enabled": True, "data": "\n".join(json.dumps(d) for d in DUMMY)},
+    }])
+    doc["environments"] = {"local": doc["environments"]["dev"]}
+    return doc
 
 
-def test_dummy_data_options():
-    from tributary.plugins.sources.elasticsearch import DUMMY_MAX_DOCUMENTS
-
-    # The form sends the array as text, YAML as a list; both end up as the list.
-    assert ElasticsearchSourceOptions(use_dummy_data=True, dummy_data='[{"a": 1}, {"b": "x"}]').dummy_data == [{"a": 1}, {"b": "x"}]
-    assert ElasticsearchSourceOptions(use_dummy_data=True, dummy_data=[{"a": 1}]).dummy_data == [{"a": 1}]
-    # Cluster fields are not needed in dummy mode (and a connection may still supply them).
-    opts = ElasticsearchSourceOptions(use_dummy_data=True, dummy_data=[{"a": 1}])
-    assert opts.nodes is None and opts.index is None
-    assert ElasticsearchSourceOptions(use_dummy_data=True, dummy_data=[{"a": 1}], nodes="es", index="o").index == "o"
-    # Off: the data is kept but the cluster fields are mandatory again.
-    assert ElasticsearchSourceOptions(nodes="es", index="o", dummy_data=[{"a": 1}]).dummy_data == [{"a": 1}]
-    for bad, message in [
-        ({"use_dummy_data": True}, "dummy_data\n  Value error, required when use_dummy_data is on"),
-        ({"use_dummy_data": True, "dummy_data": ""}, "required when use_dummy_data is on"),
-        ({"use_dummy_data": True, "dummy_data": "[1, 2]"}, "every item must be a JSON object"),
-        ({"use_dummy_data": True, "dummy_data": '{"a": 1}'}, "must be a JSON array of documents"),
-        ({"use_dummy_data": True, "dummy_data": "[{"}, "not valid JSON"),
-        ({"use_dummy_data": True, "dummy_data": []}, "at least one document"),
-        ({"use_dummy_data": True, "dummy_data": [{}] * (DUMMY_MAX_DOCUMENTS + 1)}, f"at most {DUMMY_MAX_DOCUMENTS} documents \\(101 given\\)"),
-        ({"index": "o"}, "nodes\n  Value error, required unless use_dummy_data is on"),
-        ({"nodes": "es"}, "index\n  Value error, required unless use_dummy_data is on"),
-    ]:
-        with pytest.raises(ValidationError, match=message):
-            ElasticsearchSourceOptions(**bad)
-
-
-def test_dummy_data_fields_say_when_they_apply():
-    """The form shows dummy_data (starred) only with the switch on, and stars the cluster
-    fields only with it off; the JSON array gets a multiline editor."""
-    props = ElasticsearchSourceOptions.model_json_schema()["properties"]
-    assert props["dummy_data"]["x-when"] == {"field": "use_dummy_data", "in": [True], "required_in": [True]}
-    assert props["dummy_data"]["format"] == "json"
-    assert props["nodes"]["x-when"] == {"field": "use_dummy_data", "required_in": [False]}
-    assert props["index"]["x-when"] == {"field": "use_dummy_data", "required_in": [False]}
-
-
-def test_dummy_documents_are_shaped_like_the_connectors_output(spark):
-    ctx = RunContext(spark=spark, registry=default_registry(), pipeline_id="t", env="test")
-    opts = ElasticsearchSourceOptions(use_dummy_data=True, dummy_data=DUMMY, nodes=NOWHERE, index="orders", include_metadata=True)
-    df = ElasticsearchSource().read(ctx, opts, None)
-    # Columns in alphabetical order, types inferred from the values, _id kept out of the columns.
-    assert df.columns == ["address", "amount", "country", "order_id", "order_ts", "tags", "_metadata"]
-    assert dict(df.dtypes)["order_id"] == "bigint" and dict(df.dtypes)["tags"] == "array<string>" and dict(df.dtypes)["address"] == "struct<city:string>"
-    rows = {r._metadata["_id"]: (r.order_id, r.amount, r.country, r._metadata["_index"]) for r in df.collect()}
-    assert rows == {"a1": (1, 10.0, "in", "orders"), "a2": (2, -1.0, "us", "orders"), "3": (None, 5.0, "de", "orders"), "4": (4, 7.5, "USA", "orders"), "5": (5, 3.0, "gb", "orders")}
-    plain = ElasticsearchSource().read(ctx, ElasticsearchSourceOptions(use_dummy_data=True, dummy_data=DUMMY[:2]), None)
-    assert plain.columns == ["address", "amount", "country", "order_id", "tags"] and plain.count() == 2
-
-
-def test_dummy_data_honours_a_declared_schema_and_the_preview_limit(spark, tmp_path):
-    doc = dummy_pipeline(tmp_path, include_metadata=True)
-    doc["sources"][0]["schema"] = {"kind": "ddl", "ddl": "order_id INT, amount DECIMAL(10,2), country STRING, order_ts TIMESTAMP"}
-    doc["transforms"][0]["options"]["sql"] = "SELECT _metadata['_id'] AS doc_id, order_id, amount, country, order_ts FROM orders"
-    analysis = analyze(doc, spark=spark)
-    assert analysis["orders_src"].ok and [f["name"] for f in analysis["orders_src"].schema["fields"]] == ["order_id", "amount", "country", "order_ts", "_metadata"]
-    result = preview(doc, "orders_clean", spark=spark, limit=2)
-    assert len(result.rows) == 2
-    assert {f["name"]: f["type"] for f in result.schema["fields"]} == {"doc_id": "string", "order_id": "integer", "amount": "decimal(10,2)", "country": "string", "order_ts": "timestamp"}
-    assert result.rows[0] == {"doc_id": "a1", "order_id": 1, "amount": "10.00", "country": "in", "order_ts": None}
+def test_dummy_data_needs_no_connector(tmp_path):
+    compiled = compile_pipeline(dummy_pipeline(tmp_path), env="local")
+    assert required_packages(compiled) == [] and required_conf(compiled) == {}
 
 
 def test_pipeline_runs_on_dummy_data_without_any_cluster(spark, tmp_path):
@@ -329,26 +279,8 @@ def test_pipeline_runs_on_dummy_data_without_any_cluster(spark, tmp_path):
         "checks": [{"type": "not_null", "column": "order_id"}, {"type": "range", "column": "amount", "min": 0}, {"type": "expression", "expr": "length(country) = 2"}],
         "quarantine_sink": {"type": "file", "options": {"path": str(tmp_path / "out" / "bad"), "mode": "overwrite"}},
     }]
-    summary = run(doc, spark=spark)
+    summary = run(doc, env="local", spark=spark)
     assert summary.sinks_written == ["orders_out"]
     assert {r.order_id for r in spark.read.parquet(str(tmp_path / "out" / "orders")).collect()} == {1, 5}
     bad = {r.order_id: r._dq_failed_checks for r in spark.read.parquet(str(tmp_path / "out" / "bad")).collect()}
     assert bad == {2: ["range_2"], None: ["not_null_1"], 4: ["expression_3"]}
-
-
-def test_dummy_data_as_text_from_the_form(spark, tmp_path):
-    doc = dummy_pipeline(tmp_path)
-    doc["sources"][0]["options"]["dummy_data"] = json.dumps(DUMMY[:3])
-    doc["sources"][0]["options"].pop("nodes")  # no connection, no nodes: nothing is needed
-    assert len(preview(doc, "orders_src", spark=spark, limit=10).rows) == 3
-
-
-def test_dummy_data_needs_no_connector(tmp_path):
-    compiled = compile_pipeline(dummy_pipeline(tmp_path))
-    assert required_packages(compiled) == [] and required_conf(compiled) == {}
-
-
-def test_dummy_data_issues_are_reported_on_their_field(tmp_path):
-    with pytest.raises(SpecError) as exc:
-        compile_pipeline(es_pipeline(tmp_path, "orders", nodes=NOWHERE, use_dummy_data=True, dummy_data="[1]"))
-    assert [(i.path, i.message) for i in exc.value.issues] == [("sources[0].options.dummy_data", "every item must be a JSON object (document); item 0 is not")]
