@@ -11,18 +11,19 @@ You draw a pipeline as sources → transforms → sinks, with data-quality gates
 
 ## Features
 
-- **Draw, don't code.** Drag sources, transforms, quality checks and sinks onto a canvas and connect them. Every node's settings form is generated from its plugin, so new connectors show up in the UI without frontend work.
-- **Test every step.** Press *Test* on any node to see its output on real or uploaded sample data. Validation runs as you type, down to column names in your SQL.
-- **Data quality anywhere.** Attach checks to any node or in front of any sink. Then observe, fail the run, drop bad rows, or quarantine them with the checks they failed.
+- **Draw, don't code.** Drag sources, transforms, quality checks and sinks onto a canvas and connect them. Every node's settings form is generated from its plugin, so new connectors show up in the UI without frontend work. See [`ui/README.md`](ui/README.md).
+- **Test every step.** Press *Test* on any node to see its output on real or uploaded sample data. Validation runs as you type, down to column names in your SQL. See [Running pipelines locally](docs/local-development.md).
+- **Data quality anywhere.** Attach checks to any node or in front of any sink. Then observe, fail the run, drop bad rows, or quarantine them with the checks they failed. See [how quality gates work](engine/README.md#how-it-works).
 
   ![Testing a quality block: failing rows first, each tagged with the check it fails](docs/images/quality-test.png)
 
-- **Versions and runs.** Drafts autosave; runs use immutable, validated versions. Each run gets its own Spark driver, with live logs and its data-quality history.
+- **Versions and runs.** Drafts autosave; runs use immutable, validated versions. Each run gets its own Spark driver, with live logs and its data-quality history. See [how runs work](backend/README.md#how-runs-work).
 
   ![A finished run with its data-quality results](docs/images/runs.png)
 
-- **Lakehouse and operational connectors.** Read from and write to files, Kafka (source), Apache Iceberg, Delta Lake, Apache Hudi, Elasticsearch, MongoDB and REST APIs (source and per-row enrichment), and profile or verify data with an [Amazon Deequ](https://github.com/awslabs/deequ) node. Sources can stand in with pasted dummy data, so a pipeline can be drawn and tested before the real system is reachable. See [`engine/README.md`](engine/README.md) for each connector and [`examples/`](examples/) for a pipeline per connector.
-- **One engine, many places.** The same spec runs from the CLI, the API or the UI: batch or streaming, locally or on a cluster, with Spark resources sized automatically.
+- **Lakehouse and operational connectors.** Read from and write to files, Kafka (source), Apache Iceberg, Delta Lake, Apache Hudi, Elasticsearch, MongoDB and REST APIs (source and per-row enrichment), and profile or verify data with an [Amazon Deequ](https://github.com/awslabs/deequ) node. Every connector's options are in [`engine/README.md`](engine/README.md); [`examples/`](examples/) has a pipeline per connector; the [connector guides](#documentation) walk through using and testing each one.
+- **Work locally.** In a pipeline's `local` environment, any source can use uploaded dummy data and any sink can be a dummy that writes nothing, so you can build and preview a whole pipeline with nothing running. When you want the real systems, one command starts only the Docker services your pipeline needs. See [Running pipelines locally](docs/local-development.md).
+- **One engine, many places.** The same spec runs from the CLI, the API or the UI: batch or streaming, locally or on a cluster, with Spark resources sized automatically. See the [CLI commands](engine/README.md#commands) and the [API](backend/README.md#api-apiv1).
 
 | Component | Status |
 |---|---|
@@ -39,6 +40,8 @@ docker compose -f deploy/docker-compose.yml up -d postgres
 (cd ui && npm install && npm run dev)     # open http://localhost:5173 and import examples/csv_to_parquet.yaml
 ```
 
+More on running each part: [`backend/README.md`](backend/README.md#run-it), [`ui/README.md`](ui/README.md#run-it).
+
 ## Quickstart (CLI only)
 
 ```bash
@@ -49,9 +52,22 @@ engine/.venv/bin/tributary preview examples/csv_to_parquet.yaml --node orders_cl
 engine/.venv/bin/tributary run examples/csv_to_parquet.yaml
 ```
 
+Every command and its options: [`engine/README.md`](engine/README.md#commands).
+
 Requires Java 8/11/17 and Python 3.10–3.12, which is what PySpark 3.5 supports. The Iceberg runtime defaults to 1.6.1 for the same reason (newer releases need Java 11+; pick one with `TRIBUTARY_ICEBERG_VERSION`).
 
-**Working locally:** every pipeline can have a `local` environment, where each source can stand in with uploaded dummy data (JSON Lines, up to 1,000 records) and each sink can be a dummy that writes nothing, so a pipeline previews end to end with nothing running. For real systems, `python3 scripts/local_services.py up mongodb kafka` (or `up all`, or `up --pipeline FILE`) starts only the Docker services those connectors need and prints their connection settings. See [`docs/local-development.md`](docs/local-development.md). Connector guides: [MongoDB](docs/mongodb.md), [Elasticsearch](docs/ES_AS_A_SOURCE.md), [Delta](docs/DELTA_AS_A_SOURCE.md), [Hudi](docs/HUDI_AS_A_SOURCE.md), [Iceberg](docs/iceberg-source.md), [REST](docs/REST_AS_A_SOURCE.md).
+## Working locally
+
+Two ways, which you can mix node by node; both are covered step by step in [Running pipelines locally](docs/local-development.md):
+
+- **Dummy data, nothing running.** Pick the `local` environment in the editor, then turn on *Use dummy data* on a source (upload JSON Lines, up to 1,000 records) or on a sink (it writes nothing, and Preview shows what it would get). See [dummy data](docs/local-development.md#option-b-dummy-data).
+- **Real services in Docker.** Start only what your connectors need, and get the connection settings to paste into the pipeline. See [Docker services](docs/local-development.md#option-a-real-services-in-docker).
+
+```bash
+python3 scripts/local_services.py up mongodb kafka                                  # or: up all
+engine/.venv/bin/python scripts/local_services.py up --pipeline examples/csv_to_mongodb.yaml
+python3 scripts/local_services.py env mongodb kafka                                 # connections for environments.local
+```
 
 ## A pipeline
 
@@ -85,6 +101,31 @@ sinks:
     options: { path: "${env.out}/orders" }
 ```
 
-See [`engine/README.md`](engine/README.md) for how it works, and [`docs/writing-a-plugin.md`](docs/writing-a-plugin.md) to add a connector.
+See [`engine/README.md`](engine/README.md#how-it-works) for how it works, and [`docs/writing-a-plugin.md`](docs/writing-a-plugin.md) to add a connector.
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Running pipelines locally](docs/local-development.md) | The `local` environment, dummy sources and sinks, starting Docker services per connector, wiring them into a pipeline |
+| [Engine](engine/README.md) | CLI commands, how compiling, planning, quality gates and execution work, every connector's options, known limits |
+| [Backend](backend/README.md) | Running the API, its endpoints, connections and secrets, how runs work |
+| [UI](ui/README.md) | Running the editor, what it does, code map |
+| [Writing a plugin](docs/writing-a-plugin.md) | Adding a source, transform, sink or check: interfaces, registration, contract tests |
+| [Examples](examples/) | A ready-to-run pipeline for each connector |
+
+**Connector guides**: how to set up, use and test each connector locally.
+
+| Connector | Guide |
+|---|---|
+| MongoDB (source and sink) | [`docs/mongodb.md`](docs/mongodb.md) |
+| Elasticsearch source | [`docs/ES_AS_A_SOURCE.md`](docs/ES_AS_A_SOURCE.md) |
+| Elasticsearch sink | [`deploy/elasticsearch/README.md`](deploy/elasticsearch/README.md) |
+| Delta Lake source | [`docs/DELTA_AS_A_SOURCE.md`](docs/DELTA_AS_A_SOURCE.md) |
+| Apache Hudi source | [`docs/HUDI_AS_A_SOURCE.md`](docs/HUDI_AS_A_SOURCE.md) |
+| Apache Iceberg source | [`docs/iceberg-source.md`](docs/iceberg-source.md) |
+| REST API source and enrichment | [`docs/REST_AS_A_SOURCE.md`](docs/REST_AS_A_SOURCE.md) |
+
+The Delta, Iceberg and Hudi sinks are described in [`engine/README.md`](engine/README.md#how-it-works). For Kafka and files, start from [`examples/kafka_to_parquet.yaml`](examples/kafka_to_parquet.yaml) and [`examples/csv_to_parquet.yaml`](examples/csv_to_parquet.yaml).
 
 The screenshots above are generated: with the backend and UI running, `node scripts/capture-screenshots.mjs` recreates them (it needs Google Chrome).
